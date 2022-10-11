@@ -177,43 +177,44 @@ class MetaKnowledgeDataset(object):
                 "Start tokenizing ... {} instances".format(len(self.data)))
 
             for qa_data in self.data:
-                train_facts = []
-                for fact in qa_data["facts"]:
-                    train_tokenized_input = tokenizer(
-                        fact[0],
-                        truncation=True,
-                        return_tensors="pt",
-                        max_length=128
-                    )
+                train_inputs = [fact[0] for fact in qa_data["facts"]]
+                train_outputs = [fact[1] for fact in qa_data["facts"]]
 
-                    train_tokenized_output = tokenizer(
-                        fact[1],
-                        truncation=True,
-                        return_tensors="pt",
-                        max_length=16
-                    )
+                train_tokenized_input = tokenizer.batch_encode_plus(
+                    train_inputs,
+                    padding=True,
+                    truncation=True,
+                    return_tensors="pt",
+                    max_length=32
+                )
 
-                    fact_batch = {
-                        "input_ids": train_tokenized_input["input_ids"],
-                        "attention_mask": train_tokenized_input["attention_mask"],
-                        "labels": train_tokenized_output["input_ids"],
-                    }
+                train_tokenized_output = tokenizer.batch_encode_plus(
+                    train_outputs,
+                    padding=True,
+                    truncation=True,
+                    return_tensors="pt",
+                    max_length=4
+                )
 
-                    train_facts.append(fact_batch)
+                fact_batch = {
+                    "train_input_ids": train_tokenized_input["input_ids"],
+                    "train_attention_mask": train_tokenized_input["attention_mask"],
+                    "train_labels": train_tokenized_output["input_ids"],
+                }
 
                 if self.args.expand_dev:
                     for qa_pair in qa_data["qa_pairs"]:
                         dev_inputs = qa_pair[0]
                         dev_outputs = str(qa_pair[1])
 
-                        dev_tokenized_input = tokenizer(
+                        dev_tokenized_input = tokenizer.batch_encode_plus(
                             dev_inputs,
                             truncation=True,
                             return_tensors="pt",
                             max_length=128
                         )
 
-                        dev_tokenized_output = tokenizer(
+                        dev_tokenized_output = tokenizer.batch_encode_plus(
                             dev_outputs,
                             truncation=True,
                             return_tensors="pt",
@@ -224,7 +225,9 @@ class MetaKnowledgeDataset(object):
                             "input_ids": dev_tokenized_input["input_ids"],
                             "attention_mask": dev_tokenized_input["attention_mask"],
                             "labels": dev_tokenized_output["input_ids"],
-                            "facts": train_facts
+                            "train_input_ids": train_tokenized_input["input_ids"],
+                            "train_attention_mask": train_tokenized_input["attention_mask"],
+                            "train_labels": train_tokenized_output["input_ids"],
                         }
 
                         self.dataset.append(feature)
@@ -240,7 +243,7 @@ class MetaKnowledgeDataset(object):
                         padding=True,
                         truncation=True,
                         return_tensors="pt",
-                        max_length=128
+                        max_length=32
                     )
 
                     dev_tokenized_output = tokenizer.batch_encode_plus(
@@ -248,14 +251,16 @@ class MetaKnowledgeDataset(object):
                         padding=True,
                         truncation=True,
                         return_tensors="pt",
-                        max_length=16
+                        max_length=4
                     )
 
                     feature = {
                         "input_ids": dev_tokenized_input["input_ids"],
                         "attention_mask": dev_tokenized_input["attention_mask"],
                         "labels": dev_tokenized_output["input_ids"],
-                        "facts": train_facts
+                        "train_input_ids": train_tokenized_input["input_ids"],
+                        "train_attention_mask": train_tokenized_input["attention_mask"],
+                        "train_labels": train_tokenized_output["input_ids"],
                     }
 
                     self.dataset.append(feature)
