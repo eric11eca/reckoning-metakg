@@ -8,6 +8,7 @@ from tqdm import tqdm
 from sklearn.metrics import accuracy_score
 
 from transformers import T5ForConditionalGeneration, T5Tokenizer
+from transformers import GPT2Tokenizer, GPT2LMHeadModel
 from transformers import AdamW, get_linear_schedule_with_warmup
 
 from meta_kg.dataset import MetaKnowledgeDataset
@@ -18,13 +19,15 @@ from torch.utils.data import DataLoader
 
 
 def run(args, logger):
-    tokenizer = T5Tokenizer.from_pretrained(args.model_name_or_path)
+    tokenizer = GPT2Tokenizer.from_pretrained(args.model_name_or_path)
     train_data = MetaKnowledgeDataset(
         logger, args, args.train_dir,
         data_type="train", is_training=True)
     dev_data = MetaKnowledgeDataset(
         logger, args, args.train_dir,
         data_type="dev", is_training=False)
+
+    print(len(dev_data))
 
     train_data.load_dataset(tokenizer)
     train_data.load_dataloader()
@@ -78,10 +81,11 @@ def run(args, logger):
             num_training_steps=1000
         )
 
-        train(args, logger, model, train_data, dev_data, optimizer, scheduler)
+        train(args, logger, model, tokenizer,
+              train_data, dev_data, optimizer, scheduler)
 
 
-def train(args, logger, model, train_data, dev_data, optimizer, scheduler):
+def train(args, logger, model, tokenizer, train_data, dev_data, optimizer, scheduler):
     model.train()
     global_batch = 0
     global_step = 0
@@ -96,27 +100,36 @@ def train(args, logger, model, train_data, dev_data, optimizer, scheduler):
             batch = batch[0]
             global_batch += 1
 
-            if torch.cuda.is_available():
-                batch = [b.to(torch.device("cuda")) for b in batch[0]]
+            # if torch.cuda.is_available():
+            #     batch = batch.to(torch.device("cuda"))
+
+            train_input_ids = batch["train_input_ids"].to(
+                torch.device("cuda"))
+            train_attention_mask = batch["train_attention_mask"].to(
+                torch.device("cuda"))
+            train_labels = batch["train_labels"].to(
+                torch.device("cuda"))
+
+            dev_input_ids = batch["input_ids"].to(torch.device("cuda"))
+            dev_attention_mask = batch["attention_mask"].to(
+                torch.device("cuda"))
+            dev_labels = batch["labels"].to(torch.device("cuda"))
 
             inner_opt = torch.optim.SGD(model.parameters(), lr=args.inner_lr)
             with higher.innerloop_ctx(model, inner_opt, copy_initial_weights=False) as (fmodel, diffopt):
                 # Train
-                for fact in batch["facts"]:
+                for _ in range(args.n_inner_iter):
                     train_out = fmodel(
-                        input_ids=fact["input_ids"],
-                        attention_mask=fact["attention_mask"],
-                        labels=fact["labels"]
+                        input_ids=train_input_ids,
+                        attention_mask=train_attention_mask.to(
+                            torch.device("cuda")),
+                        labels=train_labels.to(torch.device("cuda"))
                     )
                     train_loss = train_out.loss
                     train_losses.append(train_loss.item())
                     diffopt.step(train_loss)
 
                 # Dev
-                dev_input_ids = batch["input_ids"]
-                dev_attention_mask = batch["attention_mask"]
-                dev_labels = batch["labels"]
-
                 dev_out = fmodel(
                     dev_input_ids,
                     dev_attention_mask,
@@ -135,18 +148,22 @@ def train(args, logger, model, train_data, dev_data, optimizer, scheduler):
                     model.zero_grad()
 
                     if global_step % args.eval_period == 0:
+                        logger.info("evaluating...")
                         model.eval()
-                        curr_em = inference(model, dev_data)
+                        curr_em = inference(
+                            model, tokenizer, dev_data.dataloader)
                         logger.info("Step %d Train loss %.2f %s %s on epoch=%d" % (
                             global_step,
                             np.mean(train_losses),
                             dev_data.metric,
                             curr_em,
                             epoch))
-                        logger.info("train loss: {}; dev loss: {}".format(
-                            np.mean(train_losses), np.mean(dev_losses)))
                         train_losses = []
                         dev_losses = []
+
+                    logger.info("train loss: {}; dev loss: {}".format(
+                        np.mean(train_losses), np.mean(dev_losses)))
+
                     #     if best_accuracy < curr_em:
                     #         model_state_dict = {k:v.cpu() for (k, v) in model.state_dict().items()}
                     #         torch.save(model_state_dict, os.path.join(args.output_dir, "best-model.pt"))
@@ -172,13 +189,14 @@ def train(args, logger, model, train_data, dev_data, optimizer, scheduler):
 
 def generate(
     model,
-    features,
-    max_length=None,
+    input_ids,
+    attention_mask,
+    max_length=4,
     no_repeat_ngram_size=None,
-    num_beams=None,
+    num_beams=10,
     do_sample=None,
     top_p=None,
-    min_length=None,
+    min_length=1,
     top_k=None,
     num_return_sequences=None
 ):
@@ -188,8 +206,8 @@ def generate(
         top_p = None
 
     outs = model.generate(
-        input_ids=features["input_ids"],
-        attention_mask=features["attention_mask"],
+        input_ids=input_ids,
+        attention_mask=attention_mask,
         max_length=max_length,
         min_length=min_length,
         num_beams=num_beams,
@@ -206,21 +224,21 @@ def generate(
 
 def inference(model, tokenizer, eval_dataloader):
     model.eval()
-    all_preds = []
-    all_labels = []
+    all_out = []
+    all_label = []
     for batch in tqdm(eval_dataloader, desc="Inference"):
-        if torch.cuda.is_available():
-            batch = [b.to(torch.device("cuda")) for b in batch[0]]
-
+        batch = batch[0]
         n_inner_iter = 5
         inner_opt = torch.optim.SGD(model.parameters(), lr=1e-1)
 
         with higher.innerloop_ctx(model, inner_opt, track_higher_grads=False) as (fmodel, diffopt):
             for _ in range(n_inner_iter):
                 train_out = fmodel(
-                    input_ids=batch["input_ids"],
-                    attention_mask=batch["attention_mask"],
-                    labels=batch["labels"]
+                    input_ids=batch["train_input_ids"].to(
+                        torch.device("cuda")),
+                    attention_mask=batch["train_attention_mask"].to(
+                        torch.device("cuda")),
+                    labels=batch["train_labels"].to(torch.device("cuda"))
                 )
                 train_loss = train_out.loss
                 diffopt.step(train_loss)
@@ -228,15 +246,17 @@ def inference(model, tokenizer, eval_dataloader):
             with torch.no_grad():
                 output = generate(
                     fmodel,
-                    batch["input_ids"][0],
-                    batch["attention_mask"][0]
+                    batch["input_ids"].to(torch.device("cuda")),
+                    batch["attention_mask"].to(torch.device("cuda"))
                 )
                 eval_out = [tokenizer.decode(
                     out, skip_special_tokens=True) for out in output]
                 eval_label = [tokenizer.decode(
-                    batch["labels"][0], skip_special_tokens=True)]
+                    label, skip_special_tokens=True) for label in batch["labels"]]
+                all_out.extend(eval_out)
+                all_label.extend(eval_label)
 
-    return accuracy_score(eval_label, eval_out)
+    return accuracy_score(all_label, all_out)
 
 
 # @dataclass
