@@ -3,14 +3,17 @@ import re
 import json
 import uuid
 import string
+import torch
 import numpy as np
 
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
-from .utils import MyMetaLearningDataset, MyMetaLearningDataLoader
+from torch.utils.data import Dataset, DataLoader, RandomSampler, SequentialSampler
+
 from .reader import JsonlReader
+from .utils import read_jsonl
 
 
 @dataclass
@@ -21,28 +24,26 @@ class MetaQAInput:
     :param guid: the instance identifier (optional)
     """
     guid: str = field(default='')
-    question: str = field(default='')
-    answer: str = field(default='')
-    facts: List[float] = field(default_factory=list)
+    qa_pairs: List[Tuple] = field(default_factory=list)
+    facts: List[Tuple] = field(default_factory=list)
     evaluation: bool = False
     prefix: str = ""
 
     def __str__(self):
-        return "<InputExample> label: {}, question: {}, answer: {}, evaluation={}, prefix={}".format(
+        return "<InputExample> label: {}, qa_pairs: {}, facts: {}, evaluation={}, prefix={}".format(
             self.label, self.question,
             self.answer, str(self.evaluation), self.prefix,
         )
 
     @classmethod
     def from_json(cls, json_instance):
-        question = json_instance["question"] if "question" in json_instance else None
-        answer = json_instance["answer"] if "answer" in json_instance else None
+        qa_pairs = json_instance["qa_pairs"] if "qa_pairs" in json_instance else None
         facts = json_instance["facts"] if "facts" in json_instance else None
         guid = json_instance["guid"] if "guid" in json_instance else None
-        return cls(guid, question, answer, facts)
+        return cls(guid, qa_pairs, facts)
 
 
-class MetaQADataReader(JsonlReader):
+class MetaQADataReader():
     """Custom dataset loader for QA problems with associated knowledge facts."""
 
     @staticmethod
@@ -53,19 +54,17 @@ class MetaQADataReader(JsonlReader):
         :rtype instance: situation_modeling.readers.input_example.InputBase
         """
         guid = instance["guid"] if "guid" in instance else str(uuid.uuid1())
-        question = instance["question"]
-        answer = instance["answer"]
+        qa_pairs = instance["qa_pairs"]
         facts = instance["facts"]
 
         return MetaQAInput(
             guid=guid,
-            question=question,
-            answer=answer,
+            qa_pairs=qa_pairs,
             facts=facts
         )
 
     @classmethod
-    def json_file_reader(cls, path, evaluation):
+    def jsonl_file_reader(cls, path, evaluation):
         """The method responsible for parsing in the input file. Implemented here
         to make the overall pipeline more transparent.
 
@@ -73,31 +72,20 @@ class MetaQADataReader(JsonlReader):
         :param evaluation: indicator as to where this is an evaluation file (based on name)
         :param config: the configuration
         """
-        total_data = []
+        total_data = read_jsonl(path)
 
-        with open(path) as my_json:
-            for k, line in enumerate(my_json):
-                line = line.strip()
-                json_line = json.loads(line)
-                if not json_line["output"] or json_line["output"] == "none":
-                    continue
+        total_qa_data = []
+        for instance in total_data:
+            qa_data = cls._read(instance)
+            qa_data.evaluation = evaluation
+            total_qa_data.append(qa_data)
 
-                line_instance = cls._read(json_line)
-                line_instance.evaluation = evaluation
-
-                total_data.append(line_instance)
-
-                # if k <= 3:
-                #     debug_line = f"""===========\nraw line \n {json.dumps(json_line,indent=4)} \n processed line \n {line_instance}\n============\n"""
-                #     logger.info(debug_line)
-
-        return total_data
+        return total_qa_data
 
 
 def meta_qa_data_loader(
     data_path: str,
     split: str,
-    config=None,
     evaluate=False
 ):
     """Code for loading data and creating dataset cache
@@ -112,43 +100,45 @@ def meta_qa_data_loader(
     # logger.info(
     #    f'Reading data from {target_data}, evaluate={str(evaluate)}')
 
-    data_container = MetaQADataReader.from_file(
+    data_container = MetaQADataReader.jsonl_file_reader(
         target_data,
-        config=config,
         evaluate=evaluate
     )
 
-    return data_container.data
+    return data_container
 
 
 class MetaKnowledgeDataset(object):
     def __init__(self, logger, args, data_path, data_type, is_training):
         self.data_path = data_path
         self.data_type = data_type
-        self.data = []
-        self.meta_qa_data = meta_qa_data_loader(
-            data_path,
-            split="train",
-            config=args,
-            evaluate=False
-        )
+        self.task_name = args.dataset
+        self.data = read_jsonl(
+            f"{data_path}/{args.dataset}/{data_type}.jsonl")
 
-        for qa_data in self.meta_qa_data:
-            train_examples = qa_data["facts"]
-            dev_examples = qa_data["qa_pairs"]
+        # self.meta_qa_data = meta_qa_data_loader(
+        #     data_path,
+        #     split="train",
+        #     config=args,
+        #     evaluate=False
+        # )
 
-            self.data.append({
-                "guid": qa_data["guid"],
-                "train_examples": train_examples,
-                "dev_examples": dev_examples
-            })
+        # for qa_data in self.meta_qa_data:
+        #     train_examples = qa_data["facts"]
+        #     dev_examples = qa_data["qa_pairs"]
+
+        #     self.data.append({
+        #         "guid": qa_data["guid"],
+        #         "train_examples": train_examples,
+        #         "dev_examples": dev_examples
+        #     })
 
         self.is_training = is_training
         self.logger = logger
         self.args = args
         self.metric = "acc"
         self.tokenizer = None
-        self.dataset = None
+        self.dataset = []
         self.dataloader = None
         self.cache = None
         self.load = not args.debug
@@ -172,131 +162,117 @@ class MetaKnowledgeDataset(object):
 
     def load_dataset(self, tokenizer, do_return=False):
         self.tokenizer = tokenizer
-        postfix = tokenizer.__class__.__name__.replace("zer", "zed")
-        split_identifier = self.args.custom_tasks_splits.split("/")[-1]
-        if split_identifier.endswith(".json"):
-            split_identifier = split_identifier[:-5]
 
         preprocessed_path = os.path.join(
-            self.data_path,
-            self.data_type +
-            "-meta-{}-{}.json".format(split_identifier, postfix)
+            *[self.data_path, f"{self.args.dataset}", f"{self.data_type}.pt"]
         )
 
         if self.load and os.path.exists(preprocessed_path):
             self.logger.info(
                 "Loading pre-tokenized data from {}".format(preprocessed_path))
-            with open(preprocessed_path, "r") as f:
-                train_input_ids, train_attention_mask, \
-                    train_decoder_input_ids, train_decoder_attention_mask, \
-                    train_metadata_task, train_metadata_questions, \
-                    dev_input_ids, dev_attention_mask, \
-                    dev_decoder_input_ids, dev_decoder_attention_mask, \
-                    dev_metadata_task, dev_metadata_questions = json.load(f)
+            self.dataset = torch.load(preprocessed_path)
 
         else:
             self.logger.info(
                 "Start tokenizing ... {} instances".format(len(self.data)))
 
-            train_inputs = []
-            train_outputs = []
-            dev_inputs = []
-            dev_outputs = []
-
-            train_metadata_task, train_metadata_questions = [], []
-            train_st, train_ed = 0, 0
-            dev_metadata_task, dev_metadata_questions = [], []
-            dev_st, dev_ed = 0, 0
-
             for qa_data in self.data:
-                guid = qa_data["guid"]
-                for dp in qa_data["train_examples"]:
-                    train_inputs.append({dp[0]})
-                    train_outputs.append([" " + item for item in dp[1]])
+                train_facts = []
+                for fact in qa_data["facts"]:
+                    train_tokenized_input = tokenizer(
+                        fact[0],
+                        truncation=True,
+                        return_tensors="pt",
+                        max_length=128
+                    )
 
-                train_st = train_ed
-                train_ed = train_ed + len(qa_data["train_examples"])
-                train_metadata_task.append((train_st, train_ed))
+                    train_tokenized_output = tokenizer(
+                        fact[1],
+                        truncation=True,
+                        return_tensors="pt",
+                        max_length=16
+                    )
 
-                for dp in qa_data["dev_examples"]:
-                    dev_inputs.append({dp[0]})
-                    dev_outputs.append([" " + item for item in dp[1]])
+                    fact_batch = {
+                        "input_ids": train_tokenized_input["input_ids"],
+                        "attention_mask": train_tokenized_input["attention_mask"],
+                        "labels": train_tokenized_output["input_ids"],
+                    }
 
-                dev_st = dev_ed
-                dev_ed = dev_ed + len(qa_data["dev_examples"])
-                dev_metadata_task.append((dev_st, dev_ed))
+                    train_facts.append(fact_batch)
 
-            train_outputs, train_metadata_questions = self.flatten(
-                train_outputs)
-            dev_outputs, dev_metadata_questions = self.flatten(dev_outputs)
+                if self.args.expand_dev:
+                    for qa_pair in qa_data["qa_pairs"]:
+                        dev_inputs = qa_pair[0]
+                        dev_outputs = str(qa_pair[1])
 
-            self.logger.info("Printing 3 examples")
-            for i in range(3):
-                self.logger.info(dev_inputs[i])
-                self.logger.info(dev_outputs[i])
+                        dev_tokenized_input = tokenizer(
+                            dev_inputs,
+                            truncation=True,
+                            return_tensors="pt",
+                            max_length=128
+                        )
 
-            self.logger.info("Tokenizing Train Input ...")
-            train_tokenized_input = tokenizer.batch_encode_plus(train_inputs,
-                                                                pad_to_max_length=True,
-                                                                max_length=self.args.max_input_length)
-            self.logger.info("Tokenizing Train Output ...")
-            train_tokenized_output = tokenizer.batch_encode_plus(train_outputs,
-                                                                 pad_to_max_length=True,
-                                                                 max_length=self.args.max_output_length)
+                        dev_tokenized_output = tokenizer(
+                            dev_outputs,
+                            truncation=True,
+                            return_tensors="pt",
+                            max_length=16
+                        )
 
-            self.logger.info("Tokenizing Dev Input ...")
-            dev_tokenized_input = tokenizer.batch_encode_plus(dev_inputs,
-                                                              pad_to_max_length=True,
-                                                              max_length=self.args.max_input_length)
-            self.logger.info("Tokenizing Dev Output ...")
-            dev_tokenized_output = tokenizer.batch_encode_plus(dev_outputs,
-                                                               pad_to_max_length=True,
-                                                               max_length=self.args.max_output_length)
+                        feature = {
+                            "input_ids": dev_tokenized_input["input_ids"],
+                            "attention_mask": dev_tokenized_input["attention_mask"],
+                            "labels": dev_tokenized_output["input_ids"],
+                            "facts": train_facts
+                        }
 
-            train_input_ids, train_attention_mask = train_tokenized_input[
-                "input_ids"], train_tokenized_input["attention_mask"]
-            train_decoder_input_ids, train_decoder_attention_mask = train_tokenized_output[
-                "input_ids"], train_tokenized_output["attention_mask"]
+                        self.dataset.append(feature)
 
-            dev_input_ids, dev_attention_mask = dev_tokenized_input[
-                "input_ids"], dev_tokenized_input["attention_mask"]
-            dev_decoder_input_ids, dev_decoder_attention_mask = dev_tokenized_output[
-                "input_ids"], dev_tokenized_output["attention_mask"]
+                else:
+                    dev_inputs = [qa_pair[0]
+                                  for qa_pair in qa_data["qa_pairs"]]
+                    dev_outputs = [str(qa_pair[1])
+                                   for qa_pair in qa_data["qa_pairs"]]
 
-            if self.load:
+                    dev_tokenized_input = tokenizer.batch_encode_plus(
+                        dev_inputs,
+                        padding=True,
+                        truncation=True,
+                        return_tensors="pt",
+                        max_length=128
+                    )
 
-                with open(preprocessed_path, "w") as f:
-                    json.dump([train_input_ids, train_attention_mask,
-                               train_decoder_input_ids, train_decoder_attention_mask,
-                               train_metadata_task, train_metadata_questions,
-                               dev_input_ids, dev_attention_mask,
-                               dev_decoder_input_ids, dev_decoder_attention_mask,
-                               dev_metadata_task, dev_metadata_questions
-                               ], f)
+                    dev_tokenized_output = tokenizer.batch_encode_plus(
+                        dev_outputs,
+                        padding=True,
+                        truncation=True,
+                        return_tensors="pt",
+                        max_length=16
+                    )
 
-        self.dataset = MyMetaLearningDataset(train_input_ids, train_attention_mask,
-                                             train_decoder_input_ids, train_decoder_attention_mask,
-                                             train_metadata_task, train_metadata_questions,
-                                             dev_input_ids, dev_attention_mask,
-                                             dev_decoder_input_ids, dev_decoder_attention_mask,
-                                             dev_metadata_task, dev_metadata_questions,
-                                             inner_bsz=self.args.inner_bsz,
-                                             is_training=self.is_training)
-        self.logger.info("Loaded {} examples from {} data".format(
-            len(self.dataset), self.data_type))
+                    feature = {
+                        "input_ids": dev_tokenized_input["input_ids"],
+                        "attention_mask": dev_tokenized_input["attention_mask"],
+                        "labels": dev_tokenized_output["input_ids"],
+                        "facts": train_facts
+                    }
 
-        if do_return:
-            return self.dataset
+                    self.dataset.append(feature)
+
+            torch.save(self.dataset, preprocessed_path)
+
+            self.logger.info("Loaded {} examples from {} data".format(
+                len(self.dataset), self.data_type))
+
+            if do_return:
+                return self.dataset
 
     def load_dataloader(self, do_return=False):
-        self.dataloader = MyMetaLearningDataLoader(
+        self.dataloader = MetaDataLoader(
             self.args, self.dataset, self.is_training)
         if do_return:
             return self.dataloader
-
-    def evaluate(self, predictions, verbose=False):
-        # not used
-        return 0.0
 
     def save_predictions(self, predictions):
         assert len(predictions) == len(self), (len(predictions), len(self))
@@ -311,6 +287,35 @@ class MetaKnowledgeDataset(object):
             f.writelines(prediction_text)
 
         self.logger.info("Saved prediction in {}".format(save_path))
+
+
+class MetaDataLoader(DataLoader):
+    def __init__(self, args, dataset, is_training):
+        if is_training:
+            sampler = RandomSampler(dataset)
+            batch_size = args.train_batch_size
+        else:
+            sampler = SequentialSampler(dataset)
+            batch_size = args.predict_batch_size
+
+        super(MetaDataLoader, self).__init__(
+            dataset, sampler=sampler, batch_size=batch_size)
+        self.collate_fn = self.dummy_collate
+        self.args = args
+
+    def dummy_collate(self, input_data):
+        return input_data
+
+    def inference_dataloader(self):
+        bsz = self.args.predict_batch_size
+        for idx, (start_idx, end_idx) in enumerate(self.dataset.metadata_rel):
+            input_ids_for_this_rel = self.dataset.input_ids[start_idx: end_idx]
+            masks_for_this_rel = self.dataset.attention_mask[start_idx: end_idx]
+            for j in range(0, len(input_ids_for_this_rel), bsz):
+                input_ids_this_batch = input_ids_for_this_rel[j: j+bsz]
+                masks_for_this_batch = masks_for_this_rel[j: j+bsz]
+
+                yield self.dataset.relation_ids[idx], self.dataset.relation_mask[idx], input_ids_this_batch, masks_for_this_batch
 
 
 def f1_score(prediction, ground_truth):
