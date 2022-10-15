@@ -10,9 +10,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Tuple
 
-from torch.utils.data import Dataset, DataLoader, RandomSampler, SequentialSampler
-
-from .reader import JsonlReader
+from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from .utils import read_jsonl
 
 
