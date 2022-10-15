@@ -1,190 +1,290 @@
-import os
 import torch
 import higher
-import numpy as np
 
+from typing import Dict
 from tqdm import tqdm
-
 from sklearn.metrics import accuracy_score
 
 from transformers import T5ForConditionalGeneration, T5Tokenizer
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
-from transformers import AdamW, get_linear_schedule_with_warmup
+from transformers import get_linear_schedule_with_warmup
+
+from torch.optim import AdamW
 
 from meta_kg.dataset import MetaKnowledgeDataset
+from meta_kg.model import GeneratorModel
 
 import torch
 
-from torch.utils.data import DataLoader
+import pytorch_lightning as pl
 
 
-def run(args, logger):
-    tokenizer = GPT2Tokenizer.from_pretrained(args.model_name_or_path)
-    train_data = MetaKnowledgeDataset(
-        logger, args, args.train_dir,
-        data_type="train", is_training=True)
-    dev_data = MetaKnowledgeDataset(
-        logger, args, args.train_dir,
-        data_type="dev", is_training=False)
+class MetaKnowledgeRunner(pl.LightningModule, GeneratorModel):
 
-    print(len(dev_data))
+    def __init__(self, config):
+        """Creates model runner instance
 
-    train_data.load_dataset(tokenizer)
-    train_data.load_dataloader()
+        :param model: the underlying aggregator model (see
+           details about construction in `cls.from_config`)
+        :param config: the global configuration and set of hyper-parameters
+        """
+        super().__init__()
 
-    dev_data.load_dataset(tokenizer)
-    dev_data.load_dataloader()
+        self.hparams.update(config)
+        self.load_dataset()
 
-    if args.do_train:
-        if args.checkpoint is not None:
-            def convert_to_single_gpu(state_dict):
-                def _convert(key):
-                    if key.startswith('module.'):
-                        return key[7:]
-                    return key
-                return {_convert(key): value for key, value in state_dict.items()}
-            model = T5ForConditionalGeneration.from_pretrained(
-                args.model_name_or_path, state_dict=convert_to_single_gpu(torch.load(args.checkpoint)))
-        else:
-            model = T5ForConditionalGeneration.from_pretrained(
-                args.model_name_or_path)
-
-        if args.n_gpu > 1:
-            model = torch.nn.DataParallel(model)
-
+        self.model = T5ForConditionalGeneration.from_pretrained(
+            self.hparams.model_name_or_path)
+        self.tokenizer = T5Tokenizer.from_pretrained(
+            self.hparams.model_name_or_path)
         if torch.cuda.is_available():
-            model.to(torch.device("cuda"))
+            self.model.to(torch.device("cuda"))
 
-        no_decay = ['bias', 'LayerNorm.weight']
+        self.global_epoch_counter = 0
+        self.model_logger.info(
+            f'Loaded runner instance, global_epoch_counter={self.global_epoch_counter}'
+        )
+
+    def forward(self, input_ids, attention_mask, labels):
+        outputs = self.model(input_ids=input_ids,
+                             attention_mask=attention_mask, labels=labels)
+        return outputs[0]
+
+    def step(self, batch, is_train: bool) -> Dict:
+        """Runs a single meta-training step
+
+        :param batch: the target batch
+        :param is_train: whether to run training or validation
+        :rtype: dict
+        :returns: dictionary that includes loss
+        """
+
+        train_features = {
+            "train_input_ids": batch[0]["train_input_ids"].to(
+                torch.device("cuda")),
+            "train_attention_mask": batch[0]["train_attention_mask"].to(
+                torch.device("cuda")),
+            "train_labels": batch[0]["train_labels"].to(
+                torch.device("cuda"))
+        }
+
+        dev_features = {
+            "dev_input_ids": batch[0]["dev_input_ids"].to(
+                torch.device("cuda")),
+            "dev_attention_mask": batch[0]["dev_attention_mask"].to(
+                torch.device("cuda")),
+            "dev_labels": batch[0]["dev_labels"].to(
+                torch.device("cuda"))
+        }
+
+        inner_opt = torch.optim.SGD(
+            self.model.parameters(),
+            lr=self.hparams.inner_lr
+        )
+
+        with higher.innerloop_ctx(
+            self.model, inner_opt,
+            copy_initial_weights=False
+        ) as (fmodel, diffopt):
+            for _ in range(self.hparams.n_inner_iter):
+                train_out = fmodel(train_features)
+                train_loss = train_out["loss"]
+                diffopt.step(train_loss)
+
+            with torch.no_grad():
+                train_pred = fmodel(train_features)
+                inner_train_loss = train_pred["loss"].cpu()
+
+            if is_train:
+                dev_out = fmodel(dev_features)
+                outer_train_loss = dev_out["loss"]
+                output_dict = {
+                    'inner_loss': inner_train_loss,
+                    'outer_loss': outer_train_loss
+                }
+
+            else:
+                with torch.no_grad:
+                    dev_out = self.model(dev_features)
+                    output_dict = {
+                        'inner_loss': inner_train_loss,
+                        'outer_loss': outer_train_loss,
+                        'print_out': dev_out["print_out"],
+                    }
+
+        return output_dict
+
+    def training_step(self, batch, batch_idx) -> Dict:
+        """Runs a single training step
+
+        :param batch: the target batch
+        :param batch_idx: the path id
+        :rtype: dict
+        :returns: dictionary that includes loss
+        """
+
+        output_dict = self.step(batch, is_train=True)
+        for mkey in output_dict:
+            self.log(
+                f'batch_{mkey}',
+                output_dict[mkey],
+                on_step=True,
+                on_epoch=False,
+                prog_bar=True
+            )
+
+        return output_dict
+
+    def training_epoch_end(self, outputs):
+        """Called at the end of the training epoch
+
+        :param outputs: the outputs of the train step
+        :rtype: None 
+        """
+        avg_inner_loss = torch.stack([x["inner_loss"] for x in outputs]).mean()
+        avg_outer_loss = torch.stack([x["outer_loss"] for x in outputs]).mean()
+
+        self.log(
+            "avg_inner_loss",
+            avg_inner_loss,
+            on_step=False,
+            on_epoch=True
+        )
+
+        self.log(
+            "avg_outer_loss",
+            avg_outer_loss,
+            on_step=False,
+            on_epoch=True
+        )
+
+    def validation_step(self, batch, batch_idx) -> Dict:
+        """Runs a single validation step
+
+        :param batch: the target batch
+        :param batch_idx: the path id
+        :rtype: dict
+        :returns: dictionary that includes loss
+        """
+        torch.set_grad_enabled(True)
+        self.model.train()
+        output_dict = self.step(batch, is_train=False)
+        return output_dict
+
+    def validation_epoch_end(self, outputs):
+        """Called at the end of the validation epoch
+        :param outputs: the outputs of the train step
+        :rtype: None 
+        """
+
+        val_loss = torch.stack([x["outer_loss"] for x in outputs]).mean()
+        self.log("val_loss", val_loss, on_epoch=True, prog_bar=True)
+
+    def configure_optimizers(self):
+        """Setup the main optimizer
+
+        :returns: the main optimizer
+        """
+        no_decay = ["bias", "LayerNorm.weight"]
         parameters_first = [
-            p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)
+            p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay)
         ]
         parameters_sec = [
-            p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)
+            p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay)
         ]
 
         optimizer_grouped_parameters = [
             {
                 "params": parameters_first,
-                "weight_decay": 0.0
+                "weight_decay": self.hparams.weight_decay
             },
             {
                 "params": parameters_sec,
                 "weight_decay": 0.0
             },
         ]
-        optimizer = AdamW(optimizer_grouped_parameters,
-                          lr=args.learning_rate, eps=args.adam_epsilon)
-        scheduler = get_linear_schedule_with_warmup(
-            optimizer,
-            num_warmup_steps=10,
-            num_training_steps=1000
+
+        optimizer = AdamW(
+            optimizer_grouped_parameters,
+            lr=self.hparams.learning_rate,
+            eps=self.hparams.adam_epsilon
+        )
+        self.opt = optimizer
+        scheduler = self.get_lr_scheduler()
+
+        return [optimizer], [scheduler]
+
+    def get_lr_scheduler(self):
+        """Sets up the optimizer learning rate scheduler
+
+        """
+        num_devices = self.hparams.n_gpu if torch.cuda.is_available() else 1
+        effective_batch_size = self.hparams.train_batch_size * \
+            self.hparams.gradient_accumulation_steps * num_devices
+        total_steps = (len(self.train_dataloader().dataset) /
+                       effective_batch_size) * self.hparams.num_train_epochs
+
+        self.model_logger.info(
+            'total_steps computed for scheduler: %s, warmup step: %s' % (
+                total_steps, str(self.hparams.warmup_steps))
         )
 
-        train(args, logger, model, tokenizer,
-              train_data, dev_data, optimizer, scheduler)
+        scheduler = get_linear_schedule_with_warmup(
+            self.opt,
+            num_warmup_steps=self.hparams.warmup_steps,
+            num_training_steps=total_steps,
+        )
+        scheduler = {
+            "scheduler": scheduler,
+            "interval": "step",
+            "frequency": 1
+        }
+        return scheduler
 
+    def load_dataset(self):
+        """Loads the dataset
 
-def train(args, logger, model, tokenizer, train_data, dev_data, optimizer, scheduler):
-    model.train()
-    global_batch = 0
-    global_step = 0
-    train_losses = []
-    dev_losses = []
-    best_accuracy = -1.0
-    stop_training = False
+        """
+        self.model_logger.info('Loading dataset')
+        self.train_data = MetaKnowledgeDataset(
+            self.model_logger,
+            self.hparams,
+            self.hparams.train_dir,
+            data_type="train", is_training=True
+        )
+        self.dev_data = MetaKnowledgeDataset(
+            self.model_logger,
+            self.hparams,
+            self.hparams.train_dir,
+            data_type="dev",
+            is_training=False
+        )
 
-    logger.info("Starting training!")
-    for epoch in range(int(args.num_train_epochs)):
-        for batch in tqdm(train_data.dataloader, desc="Epoch {}".format(epoch)):
-            batch = batch[0]
-            global_batch += 1
+        self.train_data.load_dataset(self.tokenizer)
+        self.dev_data.load_dataset(self.tokenizer)
+        self.model_logger.info('Dataset loaded')
 
-            # if torch.cuda.is_available():
-            #     batch = batch.to(torch.device("cuda"))
+    def train_dataloader(self):
+        """Loader to building training data.
 
-            train_input_ids = batch["train_input_ids"].to(
-                torch.device("cuda"))
-            train_attention_mask = batch["train_attention_mask"].to(
-                torch.device("cuda"))
-            train_labels = batch["train_labels"].to(
-                torch.device("cuda"))
+        :rtype: DataLoader
+        """
+        dataloader = self.train_data.load_dataloader()
+        self.model_logger.info(
+            'Length of training data loader %d' % len(dataloader)
+        )
+        return dataloader
 
-            dev_input_ids = batch["input_ids"].to(torch.device("cuda"))
-            dev_attention_mask = batch["attention_mask"].to(
-                torch.device("cuda"))
-            dev_labels = batch["labels"].to(torch.device("cuda"))
+    def val_dataloader(self):
+        """Loader to building validation data.
 
-            inner_opt = torch.optim.SGD(model.parameters(), lr=args.inner_lr)
-            with higher.innerloop_ctx(model, inner_opt, copy_initial_weights=False) as (fmodel, diffopt):
-                # Train
-                for _ in range(args.n_inner_iter):
-                    train_out = fmodel(
-                        input_ids=train_input_ids,
-                        attention_mask=train_attention_mask.to(
-                            torch.device("cuda")),
-                        labels=train_labels.to(torch.device("cuda"))
-                    )
-                    train_loss = train_out.loss
-                    train_losses.append(train_loss.item())
-                    diffopt.step(train_loss)
-
-                # Dev
-                dev_out = fmodel(
-                    dev_input_ids,
-                    dev_attention_mask,
-                    labels=dev_labels
-                )
-                dev_loss = dev_out.loss
-                dev_losses.append(dev_loss.detach().cpu())
-                dev_loss.backward()
-
-                if global_batch % args.gradient_accumulation_steps == 0:
-                    global_step += 1
-                    torch.nn.utils.clip_grad_norm_(
-                        model.parameters(), args.max_grad_norm)
-                    optimizer.step()
-                    scheduler.step()
-                    model.zero_grad()
-
-                    if global_step % args.eval_period == 0:
-                        logger.info("evaluating...")
-                        model.eval()
-                        curr_em = inference(
-                            model, tokenizer, dev_data.dataloader)
-                        logger.info("Step %d Train loss %.2f %s %s on epoch=%d" % (
-                            global_step,
-                            np.mean(train_losses),
-                            dev_data.metric,
-                            curr_em,
-                            epoch))
-                        train_losses = []
-                        dev_losses = []
-
-                    logger.info("train loss: {}; dev loss: {}".format(
-                        np.mean(train_losses), np.mean(dev_losses)))
-
-                    #     if best_accuracy < curr_em:
-                    #         model_state_dict = {k:v.cpu() for (k, v) in model.state_dict().items()}
-                    #         torch.save(model_state_dict, os.path.join(args.output_dir, "best-model.pt"))
-                    #         logger.info("Saving model with best %s: %s -> %s on epoch=%d, global_step=%d" % \
-                    #                 (dev_data.metric, best_accuracy, curr_em, epoch, global_step))
-                    #         best_accuracy = curr_em
-                    #         wait_step = 0
-                    #         stop_training = False
-                    #     else:
-                    #         wait_step += 1
-                    #         if wait_step >= args.wait_step:
-                    #             stop_training = True
-                    #             break
-                    #     model.train()
-
-                if global_step >= args.total_steps:
-                    stop_training = True
-                    break
-
-            if stop_training:
-                break
+        :rtype: DataLoader
+        """
+        dataloader = self.dev_data.load_dataloader()
+        self.model_logger.info(
+            'Length of validation data loader %d' % len(dataloader)
+        )
+        return dataloader
 
 
 def generate(
