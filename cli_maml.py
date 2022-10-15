@@ -21,7 +21,7 @@ def main():
     parser.add_argument("--predict_dir", default="data")
     parser.add_argument("--dataset", default="proofwriter_owa_natlang")
     parser.add_argument("--model_name_or_path",
-                        default="t5-base", required=False)
+                        default="gpt2", required=False)
 
     parser.add_argument("--output_dir", default="output",
                         type=str, required=False)
@@ -63,10 +63,12 @@ def main():
                         help="Epsilon for Adam optimizer.")
     parser.add_argument("--max_grad_norm", default=0.1, type=float,
                         help="Max gradient norm.")
-    parser.add_argument("--gradient_accumulation_steps", default=1, type=int,
+    parser.add_argument("--gradient_accumulation_steps", default=4, type=int,
                         help="Max gradient norm.")
-    parser.add_argument("--num_train_epochs", default=30.0, type=float,
+    parser.add_argument("--num_train_epochs", default=2, type=int,
                         help="Total number of training epochs to perform.")
+    parser.add_argument("--n_inner_iter", default=5, type=int,
+                        help="Total number of inner training epochs to perform.")
     parser.add_argument("--warmup_steps", default=500, type=int,
                         help="Linear warmup over warmup_steps.")
     parser.add_argument("--total_steps", default=100000, type=int,
@@ -77,7 +79,7 @@ def main():
     parser.add_argument("--verbose", action='store_true',
                         help="If true, all of the warnings related to data processing will be printed. "
                              "A number of warnings are expected for a normal SQuAD evaluation.")
-    parser.add_argument('--eval_period', type=int, default=150,
+    parser.add_argument('--eval_period', type=int, default=100,
                         help="Evaluate & save model")
     parser.add_argument('--prefix', type=str, default='',
                         help="Prefix for saving predictions")
@@ -107,7 +109,7 @@ def main():
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    args.n_gpu = torch.cuda.device_count()
+    args.n_gpu = 1
 
     if args.n_gpu > 0:
         torch.cuda.manual_seed_all(args.seed)
