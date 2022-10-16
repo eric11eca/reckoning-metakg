@@ -21,7 +21,9 @@ def main():
     parser.add_argument("--predict_dir", default="data")
     parser.add_argument("--dataset", default="proofwriter_owa_natlang")
     parser.add_argument("--model_name_or_path",
-                        default="gpt2", required=False)
+                        default="t5-small", required=False)
+    parser.add_argument("--model_type",
+                        default="t5", required=False)
 
     parser.add_argument("--output_dir", default="output",
                         type=str, required=False)
@@ -42,8 +44,8 @@ def main():
     parser.add_argument("--freeze_embeds", action='store_true', default=False)
 
     # Preprocessing/decoding-related parameters
-    parser.add_argument('--max_input_length', type=int, default=512)
-    parser.add_argument('--max_output_length', type=int, default=64)
+    parser.add_argument("--max_seq_length", default=64, type=int)
+    parser.add_argument("--max_output_length", default=16, type=int)
     parser.add_argument('--num_beams', type=int, default=4)
     parser.add_argument("--append_another_bos",
                         action='store_true', default=False)
@@ -73,7 +75,10 @@ def main():
                         help="Linear warmup over warmup_steps.")
     parser.add_argument("--total_steps", default=100000, type=int,
                         help="Linear warmup over warmup_steps.")
+
     parser.add_argument('--wait_step', type=int, default=10000000000)
+    parser.add_argument('--callback_monitor', type=str, default='val_acc')
+    parser.add_argument('--patience', type=int, default=5)
 
     # Other parameters
     parser.add_argument("--verbose", action='store_true',
@@ -87,13 +92,31 @@ def main():
                         help="Use a subset of data for debugging")
     parser.add_argument('--seed', type=int, default=42,
                         help="random seed for initialization")
+
+    parser.add_argument("--wandb_api_key", type=str, default="5d22b1d85f1fd5bb0c5758b93903c364ee5dc93d",
+                        help="The particular wandb api key to use [default='']")
+    parser.add_argument('--wandb_entity', type=str, default='causal_scaffold')
+    parser.add_argument('--wandb_project', type=str, default='meta_knowledge')
+    parser.add_argument('--wandb_name', type=str,
+                        default='t5_baseline_proofwriter_owa_natlang')
+    parser.add_argument('--wandb_data', type=str,
+                        default='')
+    parser.add_argument("--wandb_note",
+                        dest="wandb_note",
+                        default='empty',
+                        type=str,
+                        help="The note to use for the wandb [default='empty']")
+    parser.add_argument("--wandb_model",
+                        dest="wandb_model",
+                        default='',
+                        type=str,
+                        help="Specifies a location to an existing wandb model [default='']")
+
     args = parser.parse_args()
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir):
         print("Output directory () already exists and is not empty.")
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir, exist_ok=True)
-
-    # Start writing logs
 
     log_filename = "{}log.txt".format("" if args.do_train else "eval_")
 
@@ -132,7 +155,7 @@ def main():
                 "If `do_predict` is True, then `predict_dir` must be specified.")
 
     logger.info("Using {} gpus".format(args.n_gpu))
-    run(args, logger)
+    run(args)
 
 
 if __name__ == '__main__':
