@@ -1,6 +1,5 @@
 import os
 import re
-import json
 import uuid
 import string
 import torch
@@ -8,10 +7,11 @@ import numpy as np
 
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Tuple
 
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
-from .utils import read_jsonl
+
+from .utils.py_io import read_jsonl
 
 
 @dataclass
@@ -139,7 +139,7 @@ class MetaKnowledgeDataset(object):
         self.dataset = []
         self.dataloader = None
         self.cache = None
-        self.load = not args.debug
+        self.load = False
         self.gen_early_stop = False
 
     def __len__(self):
@@ -191,14 +191,8 @@ class MetaKnowledgeDataset(object):
                     padding=True,
                     truncation=True,
                     return_tensors="pt",
-                    max_length=4
+                    max_length=16
                 )
-
-                fact_batch = {
-                    "train_input_ids": train_tokenized_input["input_ids"],
-                    "train_attention_mask": train_tokenized_input["attention_mask"],
-                    "train_labels": train_tokenized_output["input_ids"],
-                }
 
                 if self.args.expand_dev:
                     for qa_pair in qa_data["qa_pairs"]:
@@ -209,14 +203,14 @@ class MetaKnowledgeDataset(object):
                             dev_inputs,
                             truncation=True,
                             return_tensors="pt",
-                            max_length=128
+                            max_length=self.args.max_seq_length
                         )
 
                         dev_tokenized_output = tokenizer.batch_encode_plus(
                             dev_outputs,
                             truncation=True,
                             return_tensors="pt",
-                            max_length=16
+                            max_length=self.args.max_seq_length
                         )
 
                         feature = {
@@ -259,6 +253,10 @@ class MetaKnowledgeDataset(object):
                         "train_input_ids": train_tokenized_input["input_ids"],
                         "train_attention_mask": train_tokenized_input["attention_mask"],
                         "train_labels": train_tokenized_output["input_ids"],
+                        "guid": qa_data["guid"],
+                        "dev_inputs": dev_inputs,
+                        "dev_outputs": dev_outputs,
+                        "evaluate": not self.is_training
                     }
 
                     self.dataset.append(feature)
@@ -271,11 +269,10 @@ class MetaKnowledgeDataset(object):
             if do_return:
                 return self.dataset
 
-    def load_dataloader(self, do_return=False):
+    def load_dataloader(self):
         self.dataloader = MetaDataLoader(
             self.args, self.dataset, self.is_training)
-        if do_return:
-            return self.dataloader
+        return self.dataloader
 
     def save_predictions(self, predictions):
         assert len(predictions) == len(self), (len(predictions), len(self))
