@@ -162,11 +162,11 @@ class MetaKnowledgeDataset(object):
         self.data_path = data_path
         self.data_type = data_type
         self.task_name = args.dataset
+        self.args = args
         self.data = self.read_data_from_file()
 
         self.is_training = is_training
         self.logger = logger
-        self.args = args
         self.tokenizer = tokenizer
         self.dataloader = None
         self.load = False
@@ -176,7 +176,7 @@ class MetaKnowledgeDataset(object):
 
     def read_data_from_file(self):
         file_path = f"{self.data_path}/{self.task_name}/{self.data_type}.jsonl"
-        file_data = MetaQADataReader.jsonl_file_reader(file_path)
+        file_data = MetaQADataReader.jsonl_file_reader(file_path, self.args)
         return file_data
 
     def flatten(self, answers):
