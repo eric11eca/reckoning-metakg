@@ -86,12 +86,9 @@ class MetaKnowledgeRunner(pl.LightningModule):
             for _ in range(self.hparams.n_inner_iter):
                 for batch in train_loader:
                     train_features = {
-                        "input_ids": batch["input_ids"].to(
-                            torch.device("cuda:1")),
-                        "attention_mask": batch["attention_mask"].to(
-                            torch.device("cuda:1")),
-                        "labels": batch["input_ids"].to(
-                            torch.device("cuda:1")),
+                        "input_ids": batch["input_ids"],
+                        "attention_mask": batch["attention_mask"],
+                        "labels": batch["input_ids"],
                         "evaluate": False
                     }
                     train_out = fmodel(train_features, print_out)
@@ -102,12 +99,9 @@ class MetaKnowledgeRunner(pl.LightningModule):
                 inner_train_loss = []
                 for batch in train_loader:
                     train_features = {
-                        "input_ids": batch["input_ids"].to(
-                            torch.device("cuda:1")),
-                        "attention_mask": batch["attention_mask"].to(
-                            torch.device("cuda:1")),
-                        "labels": batch["input_ids"].to(
-                            torch.device("cuda:1")),
+                        "input_ids": batch["input_ids"],
+                        "attention_mask": batch["attention_mask"],
+                        "labels": batch["input_ids"],
                         "evaluate": False
                     }
                     train_pred = fmodel(train_features, print_out)

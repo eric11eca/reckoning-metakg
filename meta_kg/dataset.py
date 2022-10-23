@@ -3,6 +3,7 @@ import re
 import random
 import uuid
 import string
+import torch
 import numpy as np
 
 from collections import Counter
@@ -243,7 +244,7 @@ class MetaDataLoader():
                 truncation=True,
                 return_tensors="pt",
                 max_length=32
-            ).to(self.args.device)
+            ).to(torch.device(self.args.device))
 
         facts_loader = DataLoader(
             train_inputs,
