@@ -30,55 +30,46 @@ def main():
     parser.add_argument("--expand_dev", action='store_true')
     parser.add_argument("--do_train", action='store_true')
     parser.add_argument("--do_predict", action='store_true')
-    parser.add_argument("--predict_checkpoint", type=str,
-                        default="best-model.pt")
 
     # Meta Learn parameters
-    parser.add_argument('--inner_bsz', type=int, default=16)
-    parser.add_argument('--inner_lr', type=float, default=5e-5)
-    parser.add_argument('--custom_tasks_splits', type=str, default=None)
+    parser.add_argument('--inner_lr', type=float, default=5e-5,
+                        help='Inner loop learning rate for SGD')
+    parser.add_argument("--n_inner_iter", default=5, type=int,
+                        help="Total number of inner training epochs to perform.")
 
     # Model parameters
     parser.add_argument("--checkpoint", type=str)
-    parser.add_argument("--do_lowercase", action='store_true', default=False)
-    parser.add_argument("--freeze_embeds", action='store_true', default=False)
 
     # Preprocessing/decoding-related parameters
     parser.add_argument("--max_seq_length", default=64, type=int)
     parser.add_argument("--max_output_length", default=16, type=int)
-    parser.add_argument('--num_beams', type=int, default=4)
-    parser.add_argument("--append_another_bos",
-                        action='store_true', default=False)
 
     # Training-related parameters
+    parser.add_argument("--fact_batch_size", default=4, type=int,
+                        help="Batch size per GPU/CPU for training.")
     parser.add_argument("--train_batch_size", default=1, type=int,
                         help="Batch size per GPU/CPU for training.")
     parser.add_argument("--predict_batch_size", default=1, type=int,
                         help="Batch size per GPU/CPU for evaluation.")
     parser.add_argument("--learning_rate", default=3e-5, type=float,
                         help="The initial learning rate for Adam.")
-    parser.add_argument("--warmup_proportion", default=0.01, type=float,
+    parser.add_argument("--warmup_proportion", default=0.06, type=float,
                         help="Weight decay if we apply some.")
-    parser.add_argument("--weight_decay", default=0.01, type=float,
+    parser.add_argument("--weight_decay", default=0.05, type=float,
                         help="Weight deay if we apply some.")
     parser.add_argument("--adam_epsilon", default=1e-8, type=float,
                         help="Epsilon for Adam optimizer.")
     parser.add_argument("--max_grad_norm", default=0.1, type=float,
                         help="Max gradient norm.")
-    parser.add_argument("--gradient_accumulation_steps", default=4, type=int,
+    parser.add_argument("--gradient_accumulation_steps", default=1, type=int,
                         help="Max gradient norm.")
-    parser.add_argument("--num_train_epochs", default=2, type=int,
+    parser.add_argument("--num_train_epochs", default=5, type=int,
                         help="Total number of training epochs to perform.")
-    parser.add_argument("--n_inner_iter", default=5, type=int,
-                        help="Total number of inner training epochs to perform.")
-    parser.add_argument("--warmup_steps", default=500, type=int,
-                        help="Linear warmup over warmup_steps.")
-    parser.add_argument("--total_steps", default=100000, type=int,
-                        help="Linear warmup over warmup_steps.")
-
-    parser.add_argument('--wait_step', type=int, default=10000000000)
     parser.add_argument('--callback_monitor', type=str, default='val_acc')
     parser.add_argument('--patience', type=int, default=5)
+    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--input_format', type=str, default='lm')
+    parser.add_argument('--device', type=str, default='cuda:1')
 
     # Other parameters
     parser.add_argument("--verbose", action='store_true',
@@ -98,7 +89,7 @@ def main():
     parser.add_argument('--wandb_entity', type=str, default='causal_scaffold')
     parser.add_argument('--wandb_project', type=str, default='meta_knowledge')
     parser.add_argument('--wandb_name', type=str,
-                        default='t5_baseline_proofwriter_owa_natlang')
+                        default='t5_prefix_kg_proofwriter_owa_natlang')
     parser.add_argument('--wandb_data', type=str,
                         default='')
     parser.add_argument("--wandb_note",
@@ -125,7 +116,7 @@ def main():
                         level=logging.INFO,
                         handlers=[logging.FileHandler(os.path.join(args.output_dir, log_filename)),
                                   logging.StreamHandler()])
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger("meta_knowledge.cli_maml")
     logger.info(args)
     logger.info(args.output_dir)
 
