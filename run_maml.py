@@ -50,18 +50,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
         :returns: dictionary that includes loss
         """
 
-        train_features = {
-            "input_ids": batch["train_input_ids"].to(
-                torch.device("cuda:1")),
-            "attention_mask": batch["train_attention_mask"].to(
-                torch.device("cuda:1")),
-            "labels": batch["train_labels"].to(
-                torch.device("cuda:1")),
-            "evaluate": batch["evaluate"]
-        }
-
         train_loader = batch["train_loader"]
-
         dev_features = {
             "input_ids": batch["input_ids"].to(
                 torch.device(self.hparams.device)),
