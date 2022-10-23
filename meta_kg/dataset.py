@@ -233,7 +233,7 @@ class MetaDataLoader():
             truncation=True,
             return_tensors="pt",
             max_length=32
-        ).to(torch.device(self.args.device))
+        )
 
     def causal_lm_collator(self, batch):
         """Batch collator for this custom class 
