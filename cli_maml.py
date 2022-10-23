@@ -21,9 +21,9 @@ def main():
     parser.add_argument("--predict_dir", default="data")
     parser.add_argument("--dataset", default="proofwriter_owa_natlang")
     parser.add_argument("--model_name_or_path",
-                        default="t5-small", required=False)
+                        default="gpt2", required=False)
     parser.add_argument("--model_type",
-                        default="t5", required=False)
+                        default="gpt2", required=False)
 
     parser.add_argument("--output_dir", default="output",
                         type=str, required=False)
@@ -69,7 +69,7 @@ def main():
     parser.add_argument('--patience', type=int, default=5)
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--input_format', type=str, default='lm')
-    parser.add_argument('--device', type=str, default='cuda:1')
+    parser.add_argument('--device', type=str, default='cuda:0')
 
     # Other parameters
     parser.add_argument("--verbose", action='store_true',
@@ -89,7 +89,7 @@ def main():
     parser.add_argument('--wandb_entity', type=str, default='causal_scaffold')
     parser.add_argument('--wandb_project', type=str, default='meta_knowledge')
     parser.add_argument('--wandb_name', type=str,
-                        default='t5_prefix_kg_proofwriter_owa_natlang')
+                        default='gpt2_question_kg_proofwriter_owa_natlang')
     parser.add_argument('--wandb_data', type=str,
                         default='')
     parser.add_argument("--wandb_note",
