@@ -226,6 +226,15 @@ class MetaDataLoader():
             num_workers=args.num_workers
         )
 
+    def _tokenize_collate_fn(self, batch):
+        return self.tokenizer.batch_encode_plus(
+            batch,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+            max_length=32
+        ).to(torch.device(self.args.device))
+
     def causal_lm_collator(self, batch):
         """Batch collator for this custom class 
         :param batch: an incoming batch 
@@ -237,19 +246,10 @@ class MetaDataLoader():
         train_inputs = [
             f"{fact[0]} [GEN] {fact[1]}" for fact in qa_data["facts"]]
 
-        def tokenize_collate_fn(batch):
-            return self.tokenizer.batch_encode_plus(
-                batch,
-                padding=True,
-                truncation=True,
-                return_tensors="pt",
-                max_length=32
-            ).to(torch.device(self.args.device))
-
         facts_loader = DataLoader(
             train_inputs,
             batch_size=self.args.train_batch_size,
-            collate_fn=tokenize_collate_fn,
+            collate_fn=self._tokenize_collate_fn,
             num_workers=self.args.num_workers,
             shuffle=True
         )
