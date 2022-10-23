@@ -138,7 +138,7 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
         outputs = self.model(
             input_ids=features["input_ids"],
             attention_mask=features["attention_mask"],
-            labels=features["labels"],
+            labels=features["input_ids"],
             return_dict=True
         )
 
