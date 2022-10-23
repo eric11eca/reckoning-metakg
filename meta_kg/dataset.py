@@ -1,8 +1,8 @@
 import os
 import re
+import random
 import uuid
 import string
-import torch
 import numpy as np
 
 from collections import Counter
@@ -12,6 +12,27 @@ from typing import List, Tuple
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 
 from .utils.py_io import read_jsonl
+
+
+def kg_as_span_reconstruction(triples, rules):
+    facts = []
+    for kg in triples.values():
+        text = kg['text']
+        mask = kg['representation'].split('" "')[-2].strip()
+        facts.append((text.replace(mask, "<extra_id_0>"),
+                      f"<extra_id_0> {mask} <extra_id_1>"))
+    for kg in rules.values():
+        text = kg['text']
+        mask = kg['representation'].split('" "')[-2].strip()
+        facts.append((text.replace(mask, "<extra_id_0>"),
+                      f"<extra_id_0> {mask} <extra_id_1>"))
+    return facts
+
+
+def kg_as_autoregressive(triples, rules, prefix="new fact: "):
+    facts = [(prefix, kg['text']) for kg in triples.values()]
+    facts.extend([(prefix, kg['text']) for kg in rules.values()])
+    return facts
 
 
 @dataclass
@@ -45,24 +66,53 @@ class MetaQADataReader():
     """Custom dataset loader for QA problems with associated knowledge facts."""
 
     @staticmethod
-    def _read(instance):
+    def _read(instance, args):
         """Reads a single json line from the target file. Modify here when the json schema changes
 
         :param instance: the instance to be read
+        :param args: the configuration arguments
         :rtype instance: situation_modeling.readers.input_example.InputBase
         """
-        guid = instance["guid"] if "guid" in instance else str(uuid.uuid1())
-        qa_pairs = instance["qa_pairs"]
-        facts = instance["facts"]
 
-        return MetaQAInput(
-            guid=guid,
-            qa_pairs=qa_pairs,
-            facts=facts
-        )
+        questions = instance["questions"]
+        triples = instance["triples"]
+        rules = instance["rules"]
+        guid = str(uuid.uuid4())
+
+        qa_pairs = []
+        unknown_paris = []
+        for qa_item in questions.values():
+            question = qa_item["question"].replace(".", "")
+            question = f"Is it true or false that {question}?"
+            answer = str(qa_item["answer"]).lower()
+            if answer != "unknown":
+                qa_pairs.append((question, answer))
+            else:
+                unknown_paris.append((question, answer))
+
+        qa_pairs += random.choices(unknown_paris, k=len(unknown_paris) // 2)
+
+        if args.input_format == "mlm":
+            facts = kg_as_span_reconstruction(triples, rules)
+        else:
+            facts = []
+            for item in qa_pairs:
+                question = item[0].replace("Is it true or false that ", "")
+                question = question.replace("?", "")
+                facts += kg_as_autoregressive(
+                    triples, rules,
+                    prefix=f"To determine if {question}, a person needs to know: "
+                )
+        # assert len(facts) == len(qa_pairs) * (len(triples) + len(rules))
+
+        return {
+            "guid": guid,
+            "qa_pairs": qa_pairs,
+            "facts": facts,
+        }
 
     @classmethod
-    def jsonl_file_reader(cls, path, evaluation):
+    def jsonl_file_reader(cls, path, config):
         """The method responsible for parsing in the input file. Implemented here
         to make the overall pipeline more transparent.
 
@@ -74,8 +124,8 @@ class MetaQADataReader():
 
         total_qa_data = []
         for instance in total_data:
-            qa_data = cls._read(instance)
-            qa_data.evaluation = evaluation
+            qa_data = cls._read(instance, config)
+
             total_qa_data.append(qa_data)
 
         return total_qa_data
@@ -107,49 +157,26 @@ def meta_qa_data_loader(
 
 
 class MetaKnowledgeDataset(object):
-    def __init__(self, logger, args, data_path, data_type, is_training):
+    def __init__(self, logger, args, tokenizer, data_path, data_type, is_training):
         self.data_path = data_path
         self.data_type = data_type
         self.task_name = args.dataset
-        self.data = read_jsonl(
-            f"{data_path}/{args.dataset}/{data_type}.jsonl")
-
-        # self.meta_qa_data = meta_qa_data_loader(
-        #     data_path,
-        #     split="train",
-        #     config=args,
-        #     evaluate=False
-        # )
-
-        # for qa_data in self.meta_qa_data:
-        #     train_examples = qa_data["facts"]
-        #     dev_examples = qa_data["qa_pairs"]
-
-        #     self.data.append({
-        #         "guid": qa_data["guid"],
-        #         "train_examples": train_examples,
-        #         "dev_examples": dev_examples
-        #     })
+        self.data = self.read_data_from_file()
 
         self.is_training = is_training
         self.logger = logger
         self.args = args
-        self.metric = "acc"
-        self.tokenizer = None
-        self.dataset = []
+        self.tokenizer = tokenizer
         self.dataloader = None
-        self.cache = None
         self.load = False
-        self.gen_early_stop = False
 
     def __len__(self):
         return len(self.data)
 
-    def decode(self, tokens):
-        return self.tokenizer.decode(tokens, skip_special_tokens=True, clean_up_tokenization_spaces=True)
-
-    def decode_batch(self, tokens):
-        return [self.decode(_tokens) for _tokens in tokens]
+    def read_data_from_file(self):
+        file_path = f"{self.data_path}/{self.task_name}/{self.data_type}.jsonl"
+        file_data = MetaQADataReader.jsonl_file_reader(file_path)
+        return file_data
 
     def flatten(self, answers):
         new_answers, metadata = [], []
@@ -158,139 +185,26 @@ class MetaKnowledgeDataset(object):
             new_answers += answer
         return new_answers, metadata
 
-    def load_dataset(self, tokenizer, do_return=False):
-        self.tokenizer = tokenizer
-
-        preprocessed_path = os.path.join(
-            *[self.data_path, f"{self.args.dataset}", f"{self.data_type}.pt"]
+    def load_dataloader(self):
+        meta_dataloader = MetaDataLoader(
+            self.args,
+            self.data,
+            self.tokenizer,
+            self.is_training
         )
 
-        if self.load and os.path.exists(preprocessed_path):
-            self.logger.info(
-                "Loading pre-tokenized data from {}".format(preprocessed_path))
-            self.dataset = torch.load(preprocessed_path)
+        self.dataloader = meta_dataloader.dataloader
 
-        else:
-            self.logger.info(
-                "Start tokenizing ... {} instances".format(len(self.data)))
-
-            for qa_data in self.data:
-                train_inputs = [fact[0] for fact in qa_data["facts"]]
-                train_outputs = [fact[1] for fact in qa_data["facts"]]
-
-                train_tokenized_input = tokenizer.batch_encode_plus(
-                    train_inputs,
-                    padding=True,
-                    truncation=True,
-                    return_tensors="pt",
-                    max_length=32
-                )
-
-                train_tokenized_output = tokenizer.batch_encode_plus(
-                    train_outputs,
-                    padding=True,
-                    truncation=True,
-                    return_tensors="pt",
-                    max_length=16
-                )
-
-                if self.args.expand_dev:
-                    for qa_pair in qa_data["qa_pairs"]:
-                        dev_inputs = qa_pair[0]
-                        dev_outputs = str(qa_pair[1])
-
-                        dev_tokenized_input = tokenizer.batch_encode_plus(
-                            dev_inputs,
-                            truncation=True,
-                            return_tensors="pt",
-                            max_length=self.args.max_seq_length
-                        )
-
-                        dev_tokenized_output = tokenizer.batch_encode_plus(
-                            dev_outputs,
-                            truncation=True,
-                            return_tensors="pt",
-                            max_length=self.args.max_seq_length
-                        )
-
-                        feature = {
-                            "input_ids": dev_tokenized_input["input_ids"],
-                            "attention_mask": dev_tokenized_input["attention_mask"],
-                            "labels": dev_tokenized_output["input_ids"],
-                            "train_input_ids": train_tokenized_input["input_ids"],
-                            "train_attention_mask": train_tokenized_input["attention_mask"],
-                            "train_labels": train_tokenized_output["input_ids"],
-                        }
-
-                        self.dataset.append(feature)
-
-                else:
-                    dev_inputs = [qa_pair[0]
-                                  for qa_pair in qa_data["qa_pairs"]]
-                    dev_outputs = [str(qa_pair[1])
-                                   for qa_pair in qa_data["qa_pairs"]]
-
-                    dev_tokenized_input = tokenizer.batch_encode_plus(
-                        dev_inputs,
-                        padding=True,
-                        truncation=True,
-                        return_tensors="pt",
-                        max_length=32
-                    )
-
-                    dev_tokenized_output = tokenizer.batch_encode_plus(
-                        dev_outputs,
-                        padding=True,
-                        truncation=True,
-                        return_tensors="pt",
-                        max_length=4
-                    )
-
-                    feature = {
-                        "input_ids": dev_tokenized_input["input_ids"],
-                        "attention_mask": dev_tokenized_input["attention_mask"],
-                        "labels": dev_tokenized_output["input_ids"],
-                        "train_input_ids": train_tokenized_input["input_ids"],
-                        "train_attention_mask": train_tokenized_input["attention_mask"],
-                        "train_labels": train_tokenized_output["input_ids"],
-                        "guid": qa_data["guid"],
-                        "dev_inputs": dev_inputs,
-                        "dev_outputs": dev_outputs,
-                        "evaluate": not self.is_training
-                    }
-
-                    self.dataset.append(feature)
-
-            torch.save(self.dataset, preprocessed_path)
-
-            self.logger.info("Loaded {} examples from {} data".format(
-                len(self.dataset), self.data_type))
-
-            if do_return:
-                return self.dataset
-
-    def load_dataloader(self):
-        self.dataloader = MetaDataLoader(
-            self.args, self.dataset, self.is_training)
         return self.dataloader
 
-    def save_predictions(self, predictions):
-        assert len(predictions) == len(self), (len(predictions), len(self))
 
-        predictions = ['n/a' if len(prediction.strip()) ==
-                       0 else prediction for prediction in predictions]
-        prediction_text = [
-            prediction.strip()+'\n' for prediction in predictions]
-        save_path = os.path.join(self.args.output_dir,
-                                 "{}_predictions.txt".format(self.args.prefix))
-        with open(save_path, "w") as f:
-            f.writelines(prediction_text)
+class MetaDataLoader():
+    def __init__(self, args, dataset, tokenizer, is_training):
+        self.args = args
+        self.dataset = dataset
+        self.tokenizer = tokenizer
+        self.evaluate = not is_training
 
-        self.logger.info("Saved prediction in {}".format(save_path))
-
-
-class MetaDataLoader(DataLoader):
-    def __init__(self, args, dataset, is_training):
         if is_training:
             sampler = RandomSampler(dataset)
             batch_size = args.train_batch_size
@@ -298,24 +212,179 @@ class MetaDataLoader(DataLoader):
             sampler = SequentialSampler(dataset)
             batch_size = args.predict_batch_size
 
-        super(MetaDataLoader, self).__init__(
-            dataset, sampler=sampler, batch_size=batch_size)
-        self.collate_fn = self.dummy_collate
-        self.args = args
+        if args.input_format == "mlm":
+            collate_fn = self.text2text_collator
+        else:
+            collate_fn = self.causal_lm_collator
 
-    def dummy_collate(self, input_data):
-        return input_data
+        self.dataloader = DataLoader(
+            dataset,
+            sampler=sampler,
+            batch_size=batch_size,
+            collate_fn=collate_fn,
+            num_workers=args.num_workers
+        )
 
-    def inference_dataloader(self):
-        bsz = self.args.predict_batch_size
-        for idx, (start_idx, end_idx) in enumerate(self.dataset.metadata_rel):
-            input_ids_for_this_rel = self.dataset.input_ids[start_idx: end_idx]
-            masks_for_this_rel = self.dataset.attention_mask[start_idx: end_idx]
-            for j in range(0, len(input_ids_for_this_rel), bsz):
-                input_ids_this_batch = input_ids_for_this_rel[j: j+bsz]
-                masks_for_this_batch = masks_for_this_rel[j: j+bsz]
+    def causal_lm_collator(self, batch):
+        """Batch collator for this custom class 
+        :param batch: an incoming batch 
+        :param tokenizer: the model tokenizer 
+        :param args: the global configuration 
+        """
 
-                yield self.dataset.relation_ids[idx], self.dataset.relation_mask[idx], input_ids_this_batch, masks_for_this_batch
+        qa_data = batch[0]
+        train_inputs = [
+            f"{fact[0]} [GEN] {fact[1]}" for fact in qa_data["facts"]]
+
+        def tokenize_collate_fn(batch):
+            return self.tokenizer.batch_encode_plus(
+                batch,
+                padding=True,
+                truncation=True,
+                return_tensors="pt",
+                max_length=32
+            ).to(self.args.device)
+
+        facts_loader = DataLoader(
+            train_inputs,
+            batch_size=self.args.train_batch_size,
+            collate_fn=tokenize_collate_fn,
+            num_workers=self.args.num_workers,
+            shuffle=True
+        )
+
+        dev_inputs = [
+            f"{qa_pair[0]} [GEN] {qa_pair[1]}" for qa_pair in qa_data["qa_pairs"]]
+        dev_outputs = [str(qa_pair[1]) for qa_pair in qa_data["qa_pairs"]]
+
+        dev_tokenized_input = self.tokenizer.batch_encode_plus(
+            dev_inputs,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+            max_length=64
+        )
+
+        feature = {
+            "input_ids": dev_tokenized_input["input_ids"],
+            "attention_mask": dev_tokenized_input["attention_mask"],
+            "labels": dev_tokenized_input["input_ids"],
+            "train_loader": facts_loader,
+            "print_out": {"guid": qa_data["guid"]},
+            "evaluate": self.evaluate
+        }
+
+        if self.evaluate:
+            feature["print_out"].update({
+                "question": dev_inputs,
+                "answer": dev_outputs,
+                # "prefix": prefix,
+            })
+
+        return feature
+
+    def text2text_collator(
+        self,
+        batch,
+    ):
+        """Batch collator for this custom class 
+        :param batch: an incoming batch 
+        :param tokenizer: the model tokenizer 
+        :param args: the global configuration 
+        """
+        qa_data = batch[0]
+
+        train_inputs = [fact[0] for fact in qa_data["facts"]]
+        train_outputs = [fact[1] for fact in qa_data["facts"]]
+
+        train_tokenized_input = self.tokenizer.batch_encode_plus(
+            train_inputs,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+            max_length=32
+        )
+
+        train_tokenized_output = self.tokenizer.batch_encode_plus(
+            train_outputs,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+            max_length=16
+        )
+
+        if self.args.expand_dev:
+            for qa_pair in qa_data["qa_pairs"]:
+                dev_inputs = qa_pair[0]
+                dev_outputs = str(qa_pair[1])
+
+                dev_tokenized_input = self.tokenizer.batch_encode_plus(
+                    dev_inputs,
+                    truncation=True,
+                    return_tensors="pt",
+                    max_length=self.args.max_seq_length
+                )
+
+                dev_tokenized_output = self.tokenizer.batch_encode_plus(
+                    dev_outputs,
+                    truncation=True,
+                    return_tensors="pt",
+                    max_length=self.args.max_seq_length
+                )
+
+                feature = {
+                    "input_ids": dev_tokenized_input["input_ids"],
+                    "attention_mask": dev_tokenized_input["attention_mask"],
+                    "labels": dev_tokenized_output["input_ids"],
+                    "train_input_ids": train_tokenized_input["input_ids"],
+                    "train_attention_mask": train_tokenized_input["attention_mask"],
+                    "train_labels": train_tokenized_output["input_ids"],
+                    "print_out": dev_inputs
+                }
+        else:
+            dev_inputs = [qa_pair[0]
+                          for qa_pair in qa_data["qa_pairs"]]
+            dev_outputs = [str(qa_pair[1])
+                           for qa_pair in qa_data["qa_pairs"]]
+
+            # dev_inputs = [
+            #    f"{qa_pair[0]} [GEN] {qa_pair[1]}" for qa_pair in qa_data["qa_pairs"]]
+
+            dev_tokenized_input = self.tokenizer.batch_encode_plus(
+                dev_inputs,
+                padding=True,
+                truncation=True,
+                return_tensors="pt",
+                max_length=64
+            )
+
+            dev_tokenized_output = self.tokenizer.batch_encode_plus(
+                dev_outputs,
+                padding=True,
+                truncation=True,
+                return_tensors="pt",
+                max_length=4
+            )
+
+            feature = {
+                "input_ids": dev_tokenized_input["input_ids"],
+                "attention_mask": dev_tokenized_input["attention_mask"],
+                "labels": dev_tokenized_output["input_ids"],
+                "train_input_ids": train_tokenized_input["input_ids"],
+                "train_attention_mask": train_tokenized_input["attention_mask"],
+                "train_labels": train_tokenized_output["input_ids"],
+                "print_out": {"guid": qa_data["guid"]},
+                "evaluate": self.evaluate
+            }
+
+        if self.evaluate:
+            feature["print_out"].update({
+                "question": dev_inputs,
+                "answer": dev_outputs,
+                # "prefix": prefix,
+            })
+
+        return feature
 
 
 def f1_score(prediction, ground_truth):

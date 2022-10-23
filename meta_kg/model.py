@@ -21,7 +21,7 @@ model_class_registry = {
     "t5": T5ForConditionalGeneration,
     "gpt2": GPT2LMHeadModel,
     "gptj": GPTJForCausalLM,
-    "gptneo": GPTNeoForCausalLM,
+    "gpt-neo": GPTNeoForCausalLM,
 }
 
 
@@ -56,11 +56,6 @@ class GeneratorModel():
 
         :returns: the generated sequences
         """
-        if not hasattr(self.model, "decoder"):
-            return NotImplementedError(
-                'Decoder method not implemented for this class, wrong model?'
-            )
-
         if do_sample and top_p:
             top_k = 0
         elif do_sample and top_k:
@@ -114,7 +109,14 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
         model_config = AutoConfig.from_pretrained(config.model_name_or_path)
 
         if "gpt" in config.model_type:
-            tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+            tokenizer.add_special_tokens({
+                'eos_token': '[EOS]',
+                'pad_token': '[PAD]',
+                'additional_special_tokens': ['[GEN]']
+            })
+
+            model.resize_token_embeddings(len(tokenizer))
+            model.config.pad_token_id = tokenizer.pad_token_id
 
         return cls(
             model,
@@ -146,11 +148,10 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
             raw_out = self.generate(
                 input_ids=features["input_ids"],
                 attention_mask=features["attention_mask"],
-                max_length=4,
-                min_length=1,
-                num_beams=5,
-                top_p=1.0,
-                top_k=5,
+                max_length=20,
+                num_beams=10,
+                top_p=0.9,
+                top_k=1,
                 do_sample=False,
                 no_repeat_ngram_size=2,
                 num_return_sequences=1

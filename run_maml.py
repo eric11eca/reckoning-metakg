@@ -60,20 +60,16 @@ class MetaKnowledgeRunner(pl.LightningModule):
             "evaluate": batch["evaluate"]
         }
 
+        train_loader = batch["train_loader"]
+
         dev_features = {
             "input_ids": batch["input_ids"].to(
-                torch.device("cuda:1")),
+                torch.device(self.hparams.device)),
             "attention_mask": batch["attention_mask"].to(
-                torch.device("cuda:1")),
+                torch.device(self.hparams.device)),
             "labels": batch["labels"].to(
-                torch.device("cuda:1")),
+                torch.device(self.hparams.device)),
             "evaluate": batch["evaluate"]
-        }
-
-        print_out = {
-            "guid": batch["guid"],
-            "question": batch["dev_inputs"],
-            "answer": batch["dev_outputs"]
         }
 
         inner_opt = torch.optim.SGD(
@@ -81,25 +77,48 @@ class MetaKnowledgeRunner(pl.LightningModule):
             lr=self.hparams.inner_lr
         )
 
+        print_out = batch["print_out"]
+
         with higher.innerloop_ctx(
             self.model, inner_opt,
             copy_initial_weights=False
         ) as (fmodel, diffopt):
             for _ in range(self.hparams.n_inner_iter):
-                train_out = fmodel(train_features, print_out)
-                train_loss = train_out["loss"]
-                diffopt.step(train_loss)
+                for batch in train_loader:
+                    train_features = {
+                        "input_ids": batch["input_ids"].to(
+                            torch.device("cuda:1")),
+                        "attention_mask": batch["attention_mask"].to(
+                            torch.device("cuda:1")),
+                        "labels": batch["input_ids"].to(
+                            torch.device("cuda:1")),
+                        "evaluate": False
+                    }
+                    train_out = fmodel(train_features, print_out)
+                    train_loss = train_out["loss"]
+                    diffopt.step(train_loss)
 
             with torch.no_grad():
-                train_pred = fmodel(train_features, print_out)
-                inner_train_loss = train_pred["loss"].cpu()
+                inner_train_loss = []
+                for batch in train_loader:
+                    train_features = {
+                        "input_ids": batch["input_ids"].to(
+                            torch.device("cuda:1")),
+                        "attention_mask": batch["attention_mask"].to(
+                            torch.device("cuda:1")),
+                        "labels": batch["input_ids"].to(
+                            torch.device("cuda:1")),
+                        "evaluate": False
+                    }
+                    train_pred = fmodel(train_features, print_out)
+                    inner_train_loss.append(train_pred["loss"].cpu())
 
             if is_train:
                 dev_out = fmodel(dev_features, print_out)
                 outer_train_loss = dev_out["loss"]
                 output_dict = {
                     'loss': outer_train_loss,
-                    'inner_loss': inner_train_loss.cpu(),
+                    'inner_loss': torch.mean(inner_train_loss),
                     'outer_loss': outer_train_loss.cpu(),
                 }
 
@@ -109,7 +128,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
                     outer_train_loss = dev_out["loss"]
                     output_dict = {
                         'loss': outer_train_loss,
-                        'inner_loss': inner_train_loss.cpu(),
+                        'inner_loss': torch.mean(inner_train_loss),
                         'outer_loss': outer_train_loss.cpu(),
                         'print_out': dev_out["print_out"],
                     }
@@ -124,7 +143,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
         :rtype: dict
         :returns: dictionary that includes loss
         """
-        output_dict = self.step(batch[0], is_train=True)
+        output_dict = self.step(batch, is_train=True)
         for mkey in ["inner_loss", "outer_loss"]:
             self.log(
                 f'batch_{mkey}',
@@ -169,7 +188,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
         """
         torch.set_grad_enabled(True)
         self.model.train()
-        output_dict = self.step(batch[0], is_train=False)
+        output_dict = self.step(batch, is_train=False)
         return output_dict
 
     def validation_epoch_end(self, outputs):
@@ -184,7 +203,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
 
         for metric_name, metric_value in metrics_out.items():
             self.log(
-                "val_%s" % metric_name,
+                f"val_{metric_name}",
                 metric_value,
                 on_epoch=True,
                 prog_bar=True
@@ -231,8 +250,12 @@ class MetaKnowledgeRunner(pl.LightningModule):
         num_devices = self.hparams.n_gpu if torch.cuda.is_available() else 1
         effective_batch_size = self.hparams.train_batch_size * \
             self.hparams.gradient_accumulation_steps * num_devices
+
         total_steps = (len(self.train_dataloader().dataset) /
                        effective_batch_size) * self.hparams.num_train_epochs
+        self.hparams.warmup_steps = (
+            total_steps / effective_batch_size
+        ) * self.hparams.warmup_proportion
 
         self.model_logger.info(
             'total_steps computed for scheduler: %s, warmup step: %s' % (
@@ -259,19 +282,22 @@ class MetaKnowledgeRunner(pl.LightningModule):
         self.train_data = MetaKnowledgeDataset(
             self.model_logger,
             self.hparams,
+            self.tokenizer,
             self.hparams.train_dir,
-            data_type="train", is_training=True
+            data_type="train",
+            is_training=True
         )
         self.dev_data = MetaKnowledgeDataset(
             self.model_logger,
             self.hparams,
+            self.tokenizer,
             self.hparams.train_dir,
             data_type="dev",
             is_training=False
         )
 
-        self.train_data.load_dataset(self.tokenizer)
-        self.dev_data.load_dataset(self.tokenizer)
+        # self.train_data.load_dataset(self.tokenizer)
+        # self.dev_data.load_dataset(self.tokenizer)
         self.model_logger.info('Dataset loaded')
 
     def train_dataloader(self):
