@@ -1,3 +1,4 @@
+import time
 import torch
 import higher
 import logging
@@ -191,13 +192,17 @@ class MetaKnowledgeRunner(pl.LightningModule):
         val_loss = torch.stack([x["outer_loss"] for x in outputs]).mean()
         self.log("val_loss", val_loss, on_epoch=True, prog_bar=True)
 
-        out_file_name = f"dev_eval_out-epoch_{self.global_epoch_counter}_step_{self.global_trainin_step}"
-        metirc_file_name = "val_metrics"
+        epoch = self.global_epoch_counter
+        step = self.global_trainin_step
+        timestr = time.strftime("%Y%m%d-%H%M%S")
+
+        out_file_name = f"dev_eval_out-epoch_{epoch}_step_{step}_{timestr}.json"
+        metirc_file_name = "val_metrics-epoch_{epoch}_step_{step}_{timestr}.json"
 
         metrics_out = self.model.evaluate_output(
             outputs,
-            f"{self.hparams.output_dir}/{out_file_name}.json",
-            f"{self.hparams.output_dir}/{metirc_file_name}.json")
+            f"{self.hparams.output_dir}/{out_file_name}",
+            f"{self.hparams.output_dir}/{metirc_file_name}")
 
         for metric_name, metric_value in metrics_out.items():
             self.log(
