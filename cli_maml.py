@@ -34,7 +34,7 @@ def main():
     # Meta Learn parameters
     parser.add_argument('--inner_lr', type=float, default=5e-5,
                         help='Inner loop learning rate for SGD')
-    parser.add_argument("--n_inner_iter", default=5, type=int,
+    parser.add_argument("--n_inner_iter", default=2, type=int,
                         help="Total number of inner training epochs to perform.")
 
     # Model parameters
@@ -45,7 +45,7 @@ def main():
     parser.add_argument("--max_output_length", default=16, type=int)
 
     # Training-related parameters
-    parser.add_argument("--fact_batch_size", default=4, type=int,
+    parser.add_argument("--fact_batch_size", default=8, type=int,
                         help="Batch size per GPU/CPU for training.")
     parser.add_argument("--train_batch_size", default=1, type=int,
                         help="Batch size per GPU/CPU for training.")
@@ -69,7 +69,7 @@ def main():
     parser.add_argument('--patience', type=int, default=5)
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--input_format', type=str, default='lm')
-    parser.add_argument('--device', type=str, default='cuda:0')
+    parser.add_argument('--device_idx', type=int, default=1)
 
     # Other parameters
     parser.add_argument("--verbose", action='store_true',
@@ -124,6 +124,8 @@ def main():
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     args.n_gpu = 1
+    args.device = f"cuda:{args.device_idx}" if torch.cuda.is_available(
+    ) else "cpu"
 
     if args.n_gpu > 0:
         torch.cuda.manual_seed_all(args.seed)

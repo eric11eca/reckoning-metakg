@@ -92,14 +92,15 @@ def setup_trainer(args) -> pl.Trainer:
     # train parameters
     train_params = dict(
         accelerator='gpu',
-        devices=[1],
+        devices=[args.device_idx],
         max_epochs=args.num_train_epochs,
         gradient_clip_val=args.max_grad_norm,
         accumulate_grad_batches=args.gradient_accumulation_steps,
         precision=32,
         callbacks=callbacks,
-        num_sanity_val_steps=10,
+        num_sanity_val_steps=4,
         log_every_n_steps=5,
+        # val_check_interval=0.1,
         # auto_lr_find=args.auto_lr_find,
         # amp_level=args.opt_level,
         # amp_backend=args.amp_backend,
