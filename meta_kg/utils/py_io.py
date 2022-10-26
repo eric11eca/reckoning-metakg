@@ -1,5 +1,11 @@
 import json
 
+def read_json(path, mode="r", **kwargs):
+    return json.loads(read_file(path, mode=mode, **kwargs))
+
+
+def write_json(data, path):
+    return write_file(json.dumps(data, indent=2), path)
 
 def to_jsonl(data):
     return json.dumps(data).replace("\n", "")

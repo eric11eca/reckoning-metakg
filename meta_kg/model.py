@@ -1,11 +1,15 @@
 import json
+import wandb
 import itertools
 import torch.nn as nn
+import numpy as np
 
 from pathlib import Path
 from typing import Dict
 from dataclasses import dataclass
+from evaluate import load
 from sklearn.metrics import accuracy_score
+from transformers import TextGenerationPipeline
 
 from transformers import (
     AutoConfig,
@@ -16,6 +20,7 @@ from transformers import (
     GPTNeoForCausalLM
 )
 
+from meta_kg.utils.py_io import write_json
 
 model_class_registry = {
     "t5": T5ForConditionalGeneration,
@@ -23,6 +28,8 @@ model_class_registry = {
     "gptj": GPTJForCausalLM,
     "gpt-neo": GPTNeoForCausalLM,
 }
+
+exact_match_metric = load("exact_match")
 
 
 class GeneratorModel():
@@ -41,8 +48,8 @@ class GeneratorModel():
         no_repeat_ngram_size=None,
         num_return_sequences=None
     ):
-        """Calls the underlying model generator. Low-level function 
-        used during training and validation. 
+        """Calls the underlying model generator. Low-level function
+        used during training and validation.
 
         :param features: the input features to the model
         :param max_length: the maximum length of the generated sequence
@@ -84,7 +91,7 @@ class GeneratorModel():
 
 class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
     """Generic transformer-based pretrained encoder decoder (e.g., T5, BART, etc..)
-    which has the added feature of doing on-the-fly generation during training and evaluation. 
+    which has the added feature of doing on-the-fly generation during training and evaluation.
     """
 
     def __init__(self, model, tokenizer, model_config, global_config):
@@ -93,12 +100,19 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
         self.model_config = model_config
         self.tokenizer = tokenizer
         self.global_config = global_config
+        self.pipe = TextGenerationPipeline(
+            model=model,
+            tokenizer=tokenizer,
+            device=global_config.device_idx,
+            return_full_text=False,
+            max_new_tokens=32,
+        )
 
     @classmethod
     def from_config(cls, config):
-        """Loads a pretrained encoder decoder from configuration 
+        """Loads a pretrained encoder decoder from configuration
 
-        :param config: the global configuration 
+        :param config: the global configuration
         """
 
         model_class = model_class_registry[config.model_type]
@@ -110,13 +124,19 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
 
         if "gpt" in config.model_type:
             tokenizer.add_special_tokens({
-                'eos_token': '[EOS]',
-                'pad_token': '[PAD]',
-                'additional_special_tokens': ['[GEN]']
+                'bos_token': '<|startoftext|>',
+                'eos_token': '<|endoftext|>',
+                'pad_token': '<pad>',
+                'additional_special_tokens': ['<gen>']
             })
 
             model.resize_token_embeddings(len(tokenizer))
             model.config.pad_token_id = tokenizer.pad_token_id
+
+        for name, param in model.named_parameters():
+            if np.any([x in name for x in ['.0.', '.1.', '.2.', '.3.']]):
+                print(f"Freezing {name}")
+                param.requires_grad = False
 
         return cls(
             model,
@@ -126,7 +146,7 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
         )
 
     def forward(self, features, print_out):
-        """A modified version of forward method for the underlying 
+        """A modified version of forward method for the underlying
            `ConditionalSequenceGeneration` model. It combines loss
            measurement and generation into one step.
         :param features: the target inputs
@@ -145,33 +165,42 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
         main_out["loss"] = outputs.loss
 
         if "evaluate" in features and features["evaluate"]:
-            raw_out = self.generate(
-                input_ids=features["input_ids"],
-                attention_mask=features["attention_mask"],
-                max_length=20,
-                num_beams=10,
-                top_p=0.9,
-                top_k=1,
-                do_sample=False,
-                no_repeat_ngram_size=2,
-                num_return_sequences=1
-            )
+            # raw_out = self.generate(
+            #     input_ids=features["input_ids"],
+            #     attention_mask=features["attention_mask"],
+            #     max_length=32,
+            #     num_beams=10,
+            #     top_p=1.0,
+            #     top_k=1,
+            #     do_sample=False,
+            #     no_repeat_ngram_size=2,
+            #     num_return_sequences=1
+            # )
 
-            main_out["print_out"]["gen_out"] = [
-                self.tokenizer.decode(
-                    ids.detach().cpu(),
-                    skip_special_tokens=True
-                ) for ids in raw_out
-            ]
+            # print("num_raw_out", raw_out.shape)
+
+            # main_out["print_out"]["gen_out"] = [
+            #     self.tokenizer.decode(
+            #         ids.detach().cpu(),
+            #         skip_special_tokens=True
+            #     ) for ids in raw_out
+            # ]
+
+            if "question" in print_out:
+                main_out["print_out"]["gen_out"] = [
+                    self.pipe(q)[0]["generated_text"].strip() for q in main_out["print_out"]["question"]]
+            else:
+                main_out["print_out"]["gen_out"] = [
+                    self.pipe(q)[0]["generated_text"].strip() for q in main_out["print_out"]["prompt"]]
 
         return main_out
 
     def output_parser_metrics(self, raw_output):
         """Function responsible for parsing the raw_output and computing particular
-        metrics from the model runner output. 
+        metrics from the model runner output.
 
-        :param raw_output: the raw output created by the model runner 
-        :rtype: tuple 
+        :param raw_output: the raw output created by the model runner
+        :rtype: tuple
         """
         metrics = {}
         sout = TranslationOutput.from_output(self.global_config, raw_output)
@@ -184,8 +213,8 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
         metrics["acc"] = sout.gen_em()
         return (sout, metrics)
 
-    def evaluate_output(self, output, out_file=None):
-        """Method for generating output produced during training and/or evaluation. 
+    def evaluate_output(self, output, out_file=None, metric_file=None):
+        """Method for generating output produced during training and/or evaluation.
 
         :param output: the output generated by runner
         :raises: ValueError
@@ -194,51 +223,77 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
         if out_file:
             out_dir = Path(out_file).parent
             out_dir.mkdir(parents=True, exist_ok=True)
-            with open(out_file, 'w') as my_out:
-                for instance in sout:
-                    my_out.write(json.dumps(instance))
-                    my_out.write("\n")
+            outputs = []
+            for instance in sout:
+                outputs.append(instance)
+            write_json(outputs, out_file)
+
+            artifact = wandb.Artifact(f"dev_eval_out", type='dataset')
+            artifact.add_file(out_file)
+            wandb.run.log_artifact(artifact)
+
+        if metric_file:
+            out_dir = Path(metric_file).parent
+            out_dir.mkdir(parents=True, exist_ok=True)
+            write_json(metrics, metric_file)
+
+            artifact = wandb.Artifact(f"val_metrics", type='dataset')
+            artifact.add_file(out_file)
+            wandb.run.log_artifact(artifact)
 
         return metrics
 
 
-@dataclass
+@ dataclass
 class TranslationOutput:
     """Helper class for translation output"""
     config: Dict
     print_data: Dict
 
-    @classmethod
+    @ classmethod
     def from_output(cls, config, output):
         """Loads from raw outputs
 
         :param outputs: the outputs produced by the model
         """
-        print_data = {}
-        print_out_keys = set(
-            itertools.chain(*[list(i["print_out"].keys()) for i in output])
-        )
 
-        for key_name in print_out_keys:
-            raw_data = [t["print_out"][key_name]
-                        if key_name in t["print_out"] else [] for t in output]
-            print_data[key_name] = [t for t in itertools.chain(*raw_data)]
+        print_data = cls.get_print_data(output, "print_out")
 
         return cls(config=config, print_data=print_data)
 
-    @property
+    @ classmethod
+    def get_print_data(cls, output, print_key):
+        print_data = {}
+        print_out_keys = set(
+            itertools.chain(*[list(i[print_key].keys()) for i in output])
+        )
+
+        for key_name in print_out_keys:
+            raw_data = [t[print_key][key_name]
+                        if key_name in t[print_key] else [] for t in output]
+            print_data[key_name] = [t for t in itertools.chain(*raw_data)]
+
+        inner_outs = []
+        for item in output:
+            inner_outs.append(item["inner_print_out"])
+
+        print_data["inner_print_out"] = inner_outs
+
+        return print_data
+
+    @ property
     def prefixes(self):
         return self.print_data.get("prefix", [])
 
-    @property
+    @ property
     def questions(self):
         return self.print_data.get("question", [])
 
-    @property
+    @ property
     def targets(self):
         return self.print_data.get("answer", [])
 
-    @property
+    @ property
     def outputs(self):
         return self.print_data.get("gen_out", [])
 
@@ -253,7 +308,7 @@ class TranslationOutput:
         if targets and outputs and len(targets) == len(outputs):
             return accuracy_score(targets, outputs)
 
-    @property
+    @ property
     def generative(self):
         return True
 
@@ -263,25 +318,24 @@ class TranslationOutput:
         """
         guids = self.print_data["guid"]
         text_in = self.print_data["question"]
-        prefixes = self.prefixes
         targets = self.targets
         outputs = self.outputs
-        label_scores = self.label_scores
+        inner_out = self.print_data["inner_print_out"]
 
         total_outputs = []
 
         for k, identifier in enumerate(guids):
             instance_dict = {}
             instance_dict["guid"] = identifier
-            instance_dict["context"] = text_in[k]
+            instance_dict["question"] = text_in[k]
             instance_dict["gen_out"] = outputs[k]
-            if targets:
-                instance_dict["answer"] = targets[k]
-            if prefixes:
-                instance_dict["meta"] = {}
-                instance_dict["meta"]["prefix"] = prefixes[k]
-            if label_scores:
-                instance_dict["label_scores"] = label_scores[k]
+            instance_dict["answer"] = targets[k]
+            instance_dict["inner_out"] = inner_out[k]
+            # if prefixes:
+            #     instance_dict["meta"] = {}
+            #     instance_dict["meta"]["prefix"] = prefixes[k]
+            # if label_scores:
+            #     instance_dict["label_scores"] = label_scores[k]
 
             total_outputs.append(instance_dict)
 
