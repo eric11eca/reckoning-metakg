@@ -2,8 +2,6 @@ import time
 import torch
 import higher
 import logging
-import numpy as np
-import learn2learn as l2l
 import pytorch_lightning as pl
 
 from typing import Dict
@@ -11,7 +9,7 @@ from torch.optim import AdamW
 from transformers import get_linear_schedule_with_warmup
 
 from meta_kg.dataset import MetaKnowledgeDataset
-from meta_kg.model import PretrainedEncoderDecoder, TranslationOutput
+from meta_kg.model import PretrainedEncoderDecoder
 from meta_kg.train import setup_trainer
 from meta_kg.utils.wandb_utils import setup_wandb
 
@@ -65,10 +63,12 @@ class MetaKnowledgeRunner(pl.LightningModule):
                 torch.device(self.hparams.device)),
             "attention_mask": batch["train_attention_mask"].to(
                 torch.device(self.hparams.device)),
-            # "labels": batch["input_ids"].to(
-            #     torch.device(self.args.device)),
             "evaluate": False
         }
+
+        if "train_labels" in batch:
+            train_features["labels"] = batch["train_labels"].to(
+                torch.device(self.hparams.device))
 
         with higher.innerloop_ctx(
             self.model, inner_opt,
@@ -85,7 +85,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
                     train_pred = fmodel(train_features, print_out)
                     inner_train_loss = train_pred["loss"].cpu()
                 else:
-                    train_features["evaluate"] = True
+                    # train_features["evaluate"] = True
                     inner_print_out = batch["inner_print_out"]
                     train_pred = fmodel(train_features, inner_print_out)
                     inner_train_loss = train_pred["loss"].cpu()
@@ -95,10 +95,12 @@ class MetaKnowledgeRunner(pl.LightningModule):
                     torch.device(self.hparams.device)),
                 "attention_mask": batch["attention_mask"].to(
                     torch.device(self.hparams.device)),
-                # "labels": batch["labels"].to(
-                #     torch.device(self.hparams.device)),
                 "evaluate": not is_train
             }
+
+            if "labels" in batch:
+                dev_features["labels"] = batch["labels"].to(
+                    torch.device(self.hparams.device))
 
             if is_train:
                 dev_out = fmodel(dev_features, print_out)
@@ -112,14 +114,16 @@ class MetaKnowledgeRunner(pl.LightningModule):
             else:
                 with torch.no_grad():
                     dev_out = fmodel(dev_features, print_out)
+                    dev_out["print_out"]["inner_loss"] = [inner_train_loss.item()]
                     outer_train_loss = dev_out["loss"]
                     output_dict = {
                         'loss': outer_train_loss,
                         'inner_loss': inner_train_loss,
                         'outer_loss': outer_train_loss.cpu(),
                         'print_out': dev_out["print_out"],
-                        "inner_print_out": train_pred["print_out"]
                     }
+
+                    # output_dict["inner_print_out"] = train_pred["print_out"]
 
         return output_dict
 
@@ -196,8 +200,8 @@ class MetaKnowledgeRunner(pl.LightningModule):
         step = self.global_trainin_step
         timestr = time.strftime("%Y%m%d-%H%M%S")
 
-        out_file_name = f"dev_eval_out-epoch_{epoch}_step_{step}_{timestr}.json"
-        metirc_file_name = "val_metrics-epoch_{epoch}_step_{step}_{timestr}.json"
+        out_file_name = f"dev_eval_out-epoch={epoch}_step={step}_{timestr}.json"
+        metirc_file_name = f"val_metrics-epoch={epoch}_step={step}_{timestr}.json"
 
         metrics_out = self.model.evaluate_output(
             outputs,
@@ -334,7 +338,12 @@ def run(args):
 
     if args.do_train:
         trainer = setup_trainer(args)
-        trainer.fit(model)
+
+        if args.load_checkpoint is not None:
+            trainer.fit(model, ckpt_path=args.load_checkpoint)
+        else:
+            trainer.fit(model)
+
         if args.wandb_project:
             wandb_runner = trainer.logger.experiment
 

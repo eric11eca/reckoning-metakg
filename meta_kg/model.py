@@ -134,7 +134,10 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
             model.config.pad_token_id = tokenizer.pad_token_id
 
         for name, param in model.named_parameters():
-            if np.any([x in name for x in ['.0.', '.1.', '.2.', '.3.']]):
+            if np.any([x in name for x in [
+                '.0.', '.1.', '.2.', '.3.',
+                '.4.', '.5.', '.6.', '.7.',
+            ]]):
                 print(f"Freezing {name}")
                 param.requires_grad = False
 
@@ -165,27 +168,6 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
         main_out["loss"] = outputs.loss
 
         if "evaluate" in features and features["evaluate"]:
-            # raw_out = self.generate(
-            #     input_ids=features["input_ids"],
-            #     attention_mask=features["attention_mask"],
-            #     max_length=32,
-            #     num_beams=10,
-            #     top_p=1.0,
-            #     top_k=1,
-            #     do_sample=False,
-            #     no_repeat_ngram_size=2,
-            #     num_return_sequences=1
-            # )
-
-            # print("num_raw_out", raw_out.shape)
-
-            # main_out["print_out"]["gen_out"] = [
-            #     self.tokenizer.decode(
-            #         ids.detach().cpu(),
-            #         skip_special_tokens=True
-            #     ) for ids in raw_out
-            # ]
-
             if "question" in print_out:
                 main_out["print_out"]["gen_out"] = [
                     self.pipe(q)[0]["generated_text"].strip() for q in main_out["print_out"]["question"]]
@@ -270,14 +252,16 @@ class TranslationOutput:
 
         for key_name in print_out_keys:
             raw_data = [t[print_key][key_name]
-                        if key_name in t[print_key] else [] for t in output]
+                         if key_name in t[print_key] else [] for t in output]
             print_data[key_name] = [t for t in itertools.chain(*raw_data)]
 
         inner_outs = []
         for item in output:
-            inner_outs.append(item["inner_print_out"])
+            if "inner_print_out" in item:
+                inner_outs.append(item["inner_print_out"])
 
-        print_data["inner_print_out"] = inner_outs
+        if len(inner_outs) > 0:
+            print_data["inner_print_out"] = inner_outs
 
         return print_data
 
@@ -320,7 +304,12 @@ class TranslationOutput:
         text_in = self.print_data["question"]
         targets = self.targets
         outputs = self.outputs
-        inner_out = self.print_data["inner_print_out"]
+        inner_loss = self.print_data["inner_loss"]
+
+        if "inner_print_out" in self.print_data:
+            inner_out = self.print_data["inner_print_out"]
+        else:
+            inner_out = None
 
         total_outputs = []
 
@@ -330,7 +319,10 @@ class TranslationOutput:
             instance_dict["question"] = text_in[k]
             instance_dict["gen_out"] = outputs[k]
             instance_dict["answer"] = targets[k]
-            instance_dict["inner_out"] = inner_out[k]
+            instance_dict["inner_loss"] = inner_loss[k]
+            if inner_out:
+                instance_dict["inner_out"] = inner_out[k]
+            
             # if prefixes:
             #     instance_dict["meta"] = {}
             #     instance_dict["meta"]["prefix"] = prefixes[k]
