@@ -19,7 +19,7 @@ def main():
     # Basic parameters
     parser.add_argument("--train_dir", default="data")
     parser.add_argument("--predict_dir", default="data")
-    parser.add_argument("--dataset", default="proofwriter_owa_natlang")
+    parser.add_argument("--dataset", default="proofwriter_cwa_natlang")
     parser.add_argument("--model_name_or_path",
                         default="gpt2", required=False)
     parser.add_argument("--model_type",
@@ -90,7 +90,7 @@ def main():
     parser.add_argument('--wandb_entity', type=str, default='causal_scaffold')
     parser.add_argument('--wandb_project', type=str, default='meta_knowledge')
     parser.add_argument('--wandb_name', type=str,
-                        default='gpt2_question_kg_proofwriter_owa_natlang')
+                        default='gpt2_tiny_d_kg_proofwriter_cwa_natlang')
     parser.add_argument('--wandb_data', type=str,
                         default='')
     parser.add_argument("--wandb_note",

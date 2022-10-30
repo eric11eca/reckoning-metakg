@@ -43,6 +43,48 @@ class MetaKnowledgeRunner(pl.LightningModule):
             f'Loaded runner instance, global_epoch_counter={self.global_epoch_counter}'
         )
 
+    def base_step(self, batch, is_train: bool) -> Dict:
+        """Runs a single training step
+
+        :param batch: the target batch
+        :param is_train: whether to run training or validation
+        :rtype: dict
+        :returns: dictionary that includes loss
+        """
+
+        print_out = batch["print_out"]
+
+        features = {
+            "input_ids": batch["input_ids"].to(
+                torch.device(self.hparams.device)),
+            "attention_mask": batch["attention_mask"].to(
+                torch.device(self.hparams.device)),
+            "evaluate": not is_train
+        }
+
+        if "labels" in batch:
+            features["labels"] = batch["labels"].to(
+                torch.device(self.hparams.device))
+
+        if is_train:
+            out = self.model(features, print_out)
+            loss = out["loss"]
+            output_dict = {
+                'loss': loss,
+            }
+
+        else:
+            with torch.no_grad():
+                out = self.model(features, print_out)
+                loss = out["loss"]
+                output_dict = {
+                    'loss': loss,
+                    'outer_loss': loss.cpu(),
+                    'print_out': out["print_out"],
+                }
+
+        return output_dict
+
     def step(self, batch, is_train: bool) -> Dict:
         """Runs a single meta-training step
 
