@@ -3,13 +3,9 @@ import re
 import random
 import uuid
 import string
-import torch
 import numpy as np
 
 from collections import Counter
-from dataclasses import dataclass, field
-from typing import List, Tuple
-
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 
 from .utils.py_io import read_jsonl
@@ -75,7 +71,7 @@ class MetaQADataReader():
                 question = question.replace("?", "")
                 facts.append(kg_as_autoregressive(
                     triples, rules,
-                    prefix=f"To determine if {question}, a person needs to know: "
+                    prefix=f"To determine if {question}, a person needs to know"
                 ))
 
         # assert len(facts) == len(qa_pairs) * (len(triples) + len(rules))
@@ -215,10 +211,14 @@ class MetaDataLoader():
         enc = "<enc>"
 
         qa_data = batch[0]
-        train_inputs = [
-            f"{fact[0]} {enc} {fact[1]}" for fact in qa_data["facts"]]
+        train_inputs = []
+        for i, fact in enumerate(qa_data["facts"]):
+            # train_inputs.append(f"{fact[0]} fact_{i} {enc} {fact[1]}")
+            train_inputs.append(f"{bos}fact_{i} {enc} {fact[1]}{eos}")
+
         # train_inputs = [
         #     f"[{bos}{fact[1]}{eos}" for fact in qa_data["facts"]]
+
         train_outputs = [
             fact[1] for fact in qa_data["facts"]
         ]
