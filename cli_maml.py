@@ -70,6 +70,7 @@ def main():
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--input_format', type=str, default='lm')
     parser.add_argument('--device_idx', type=int, default=1)
+    parser.add_argument('--load_checkpoint', type=str, default=None, help='path to checkpoint')
 
     # Other parameters
     parser.add_argument("--verbose", action='store_true',
