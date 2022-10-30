@@ -67,6 +67,7 @@ class MetaQADataReader():
         else:
             facts = []
             for item in qa_pairs:
+                # question = item[0].replace("Is it true, false, or unknown that ", "")
                 question = item[0].replace("Is it true or false that ", "")
                 question = question.replace("?", "")
                 facts.append(kg_as_autoregressive(
