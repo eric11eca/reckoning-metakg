@@ -10,6 +10,10 @@ def write_json(data, path):
 def to_jsonl(data):
     return json.dumps(data).replace("\n", "")
 
+def read_file(path, mode="r", **kwargs):
+    """Reads a file and returns its content."""
+    with open(path, mode=mode, **kwargs) as f:
+        return f.read()
 
 def write_file(data, path, mode="w", **kwargs):
     with open(path, mode=mode, **kwargs) as f:
