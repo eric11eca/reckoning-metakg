@@ -19,7 +19,7 @@ def main():
     # Basic parameters
     parser.add_argument("--train_dir", default="data")
     parser.add_argument("--predict_dir", default="data")
-    parser.add_argument("--dataset", default="proofwriter_cwa_natlang")
+    parser.add_argument("--dataset", default="proofwriter_owa_natlang")
     parser.add_argument("--model_name_or_path",
                         default="gpt2", required=False)
     parser.add_argument("--model_type",
@@ -29,7 +29,8 @@ def main():
                         type=str, required=False)
     parser.add_argument("--expand_dev", action='store_true')
     parser.add_argument("--do_train", action='store_true')
-    parser.add_argument("--do_predict", action='store_true')
+    parser.add_argument("--do_eval", action='store_true')
+    parser.add_argument("--baseline", action='store_true')
 
     # Meta Learn parameters
     parser.add_argument('--inner_lr', type=float, default=5e-5,
@@ -69,7 +70,7 @@ def main():
     parser.add_argument('--patience', type=int, default=5)
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--input_format', type=str, default='lm')
-    parser.add_argument('--device_idx', type=int, default=1)
+    parser.add_argument('--device_idx', type=int, default=0)
     parser.add_argument('--load_checkpoint', type=str, default=None, help='path to checkpoint')
 
     # Other parameters
@@ -90,7 +91,7 @@ def main():
     parser.add_argument('--wandb_entity', type=str, default='causal_scaffold')
     parser.add_argument('--wandb_project', type=str, default='meta_knowledge')
     parser.add_argument('--wandb_name', type=str,
-                        default='gpt2_tiny_d_kg_proofwriter_cwa_natlang')
+                        default='gpt2_tiny_d_kg_proofwriter_owa_natlang_unknown')
     parser.add_argument('--wandb_data', type=str,
                         default='')
     parser.add_argument("--wandb_note",
@@ -131,9 +132,9 @@ def main():
     if args.n_gpu > 0:
         torch.cuda.manual_seed_all(args.seed)
 
-    if not args.do_train and not args.do_predict:
+    if not args.do_train and not args.do_eval:
         raise ValueError(
-            "At least one of `do_train` or `do_predict` must be True.")
+            "At least one of `do_train` or `do_eval` must be True.")
 
     if args.do_train:
         if not args.train_dir:
@@ -143,10 +144,10 @@ def main():
             raise ValueError(
                 "If `do_train` is True, then `predict_dir` must be specified.")
 
-    if args.do_predict:
+    if args.do_eval:
         if not args.predict_dir:
             raise ValueError(
-                "If `do_predict` is True, then `predict_dir` must be specified.")
+                "If `do_eval` is True, then `predict_dir` must be specified.")
 
     logger.info("Using {} gpus".format(args.n_gpu))
     run(args)

@@ -231,13 +231,31 @@ class MetaDataLoader():
                 fact_prefix += f"{fact} "
             inputs.append(f"{fact_prefix} {question}")
         
-        dev_tokenized_input = self.tokenizer.batch_encode_plus(
+        tokenized_input = self.tokenizer.batch_encode_plus(
             inputs,
             padding=True,
             truncation=True,
             return_tensors="pt",
             max_length=16
         )
+
+        print_inputs = [data['qa_pairs'][0][0] for data in batch]
+        print_outputs = [data['qa_pairs'][0][1] for data in batch]
+        print_out = {
+            "guid": [data['guid'] for data in batch],
+            "questions": print_inputs,
+            "answers": print_outputs,
+        }
+
+        feature = {
+            "input_ids": tokenized_input["input_ids"],
+            "attention_mask": tokenized_input["attention_mask"],
+            "labels": tokenized_input["input_ids"],
+            "print_out": print_out,
+            "evaluate": self.evaluate
+        }
+
+        return feature
 
 
 

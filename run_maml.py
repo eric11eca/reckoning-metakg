@@ -31,6 +31,10 @@ class MetaKnowledgeRunner(pl.LightningModule):
         super().__init__()
         self.model_logger = util_logger
         self.hparams.update(vars(config))
+        self.baseline = config.baseline
+
+        if self.baseline:
+            util_logger.info("Running baseline model")
 
         self.global_trainin_step = 0
         self.global_epoch_counter = 0
@@ -79,7 +83,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
                 loss = out["loss"]
                 output_dict = {
                     'loss': loss,
-                    'outer_loss': loss.cpu(),
+                    'train_loss': loss.cpu(),
                     'print_out': out["print_out"],
                 }
 
@@ -178,15 +182,25 @@ class MetaKnowledgeRunner(pl.LightningModule):
         :rtype: dict
         :returns: dictionary that includes loss
         """
-        output_dict = self.step(batch, is_train=True)
-        for mkey in ["inner_loss", "outer_loss"]:
+        if self.baseline:
+            output_dict = self.base_step(batch, is_train=True)
             self.log(
-                f'batch_{mkey}',
-                output_dict[mkey],
+                f'batch_train_loss',
+                output_dict["train_loss"],
                 on_step=True,
                 on_epoch=False,
                 prog_bar=True
             )
+        else:
+            output_dict = self.step(batch, is_train=True)
+            for mkey in ["inner_loss", "outer_loss"]:
+                self.log(
+                    f'batch_{mkey}',
+                    output_dict[mkey],
+                    on_step=True,
+                    on_epoch=False,
+                    prog_bar=True
+                )
 
         self.global_trainin_step += 1
         return output_dict
@@ -197,22 +211,31 @@ class MetaKnowledgeRunner(pl.LightningModule):
         :param outputs: the outputs of the train step
         :rtype: None 
         """
-        avg_inner_loss = torch.stack([x["inner_loss"] for x in outputs]).mean()
-        avg_outer_loss = torch.stack([x["outer_loss"] for x in outputs]).mean()
+        if self.baseline:
+            avg_train_loss = torch.stack([x["loss"] for x in outputs]).mean()
+            self.log(
+                "avg_train_loss",
+                avg_train_loss,
+                on_step=False,
+                on_epoch=True
+            )
+        else:
+            avg_inner_loss = torch.stack([x["inner_loss"] for x in outputs]).mean()
+            avg_outer_loss = torch.stack([x["outer_loss"] for x in outputs]).mean()
 
-        self.log(
-            "avg_inner_loss",
-            avg_inner_loss,
-            on_step=False,
-            on_epoch=True
-        )
+            self.log(
+                "avg_inner_loss",
+                avg_inner_loss,
+                on_step=False,
+                on_epoch=True
+            )
 
-        self.log(
-            "avg_outer_loss",
-            avg_outer_loss,
-            on_step=False,
-            on_epoch=True
-        )
+            self.log(
+                "avg_outer_loss",
+                avg_outer_loss,
+                on_step=False,
+                on_epoch=True
+            )
 
         self.global_epoch_counter += 1
 
@@ -224,11 +247,16 @@ class MetaKnowledgeRunner(pl.LightningModule):
         :rtype: dict
         :returns: dictionary that includes loss
         """
-        torch.set_grad_enabled(True)
-        self.model.train()
-        output_dict = self.step(batch, is_train=False)
-        assert len(output_dict["print_out"]["gen_out"]) == len(
-            output_dict["print_out"]["answer"])
+        if self.baseline:
+            output_dict = self.base_step(batch, is_train=False)
+            assert len(output_dict["print_out"]["gen_out"]) == len(
+                output_dict["print_out"]["answer"])
+        else:
+            torch.set_grad_enabled(True)
+            self.model.train()
+            output_dict = self.step(batch, is_train=False)
+            assert len(output_dict["print_out"]["gen_out"]) == len(
+                output_dict["print_out"]["answer"])
         return output_dict
 
     def validation_epoch_end(self, outputs):
@@ -236,7 +264,10 @@ class MetaKnowledgeRunner(pl.LightningModule):
         :param outputs: the outputs of the train step
         :rtype: None 
         """
-        val_loss = torch.stack([x["outer_loss"] for x in outputs]).mean()
+        if self.baseline:
+            val_loss = torch.stack([x["train_loss"] for x in outputs]).mean()
+        else:
+            val_loss = torch.stack([x["outer_loss"] for x in outputs]).mean()
         self.log("val_loss", val_loss, on_epoch=True, prog_bar=True)
 
         epoch = self.global_epoch_counter
