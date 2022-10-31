@@ -144,8 +144,6 @@ class MetaKnowledgeDataset(object):
         self.dataloader = None
         self.load = False
 
-        print(self.data[:2])
-
     def __len__(self):
         return len(self.data)
 
@@ -193,6 +191,9 @@ class MetaDataLoader():
         else:
             collate_fn = self.causal_lm_collator
 
+        if args.baseline:
+            collate_fn = self.causal_lm_base_collator
+
         self.dataloader = DataLoader(
             dataset,
             sampler=sampler,
@@ -222,7 +223,8 @@ class MetaDataLoader():
         gen = "<gen>"
 
         facts_batch = [[fact[1] for fact in data['facts']] for data in batch]
-        questions = [f"{data['qa_pairs'][0][0]} {gen} {data['qa_pairs'][0][1]}{eos}" for data in batch]
+        questions = [
+            f"{data['qa_pairs'][0][0]} {gen} {data['qa_pairs'][0][1]}{eos}" for data in batch]
 
         inputs = []
         for facts, question in zip(facts_batch, questions):
@@ -230,7 +232,7 @@ class MetaDataLoader():
             for fact in facts:
                 fact_prefix += f"{fact} "
             inputs.append(f"{fact_prefix} {question}")
-        
+
         tokenized_input = self.tokenizer.batch_encode_plus(
             inputs,
             padding=True,
@@ -243,8 +245,8 @@ class MetaDataLoader():
         print_outputs = [data['qa_pairs'][0][1] for data in batch]
         print_out = {
             "guid": [data['guid'] for data in batch],
-            "questions": print_inputs,
-            "answers": print_outputs,
+            "question": print_inputs,
+            "answer": print_outputs,
         }
 
         feature = {
@@ -256,8 +258,6 @@ class MetaDataLoader():
         }
 
         return feature
-
-
 
     def causal_lm_collator(self, batch):
         """Batch collator for this custom class
@@ -284,11 +284,12 @@ class MetaDataLoader():
         train_tokenized = self._tokenize_collate_fn(train_inputs)
 
         dev_inputs = [
-            f"{bos}{qa_pair[0]} {gen} {qa_pair[1]}{eos}".replace("unknown", "none") for qa_pair in qa_data["qa_pairs"]]
+            f"{bos}{qa_pair[0]} {gen} {qa_pair[1]}{eos}" for qa_pair in qa_data["qa_pairs"]]
 
         dev_inputs_eval = [
-            f"{bos}{qa_pair[0]} {gen}".replace("unknown", "none") for qa_pair in qa_data["qa_pairs"]]
-        dev_outputs = [str(qa_pair[1]).replace("unknown", "none") for qa_pair in qa_data["qa_pairs"]]
+            f"{bos}{qa_pair[0]} {gen}" for qa_pair in qa_data["qa_pairs"]]
+        dev_outputs = [str(qa_pair[1])
+                       for qa_pair in qa_data["qa_pairs"]]
 
         dev_tokenized_input = self.tokenizer.batch_encode_plus(
             dev_inputs,

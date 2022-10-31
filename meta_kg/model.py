@@ -133,13 +133,13 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
             model.resize_token_embeddings(len(tokenizer))
             model.config.pad_token_id = tokenizer.pad_token_id
 
-        for name, param in model.named_parameters():
-            if np.any([x in name for x in [
-                '.0.', '.1.', '.2.', '.3.',
-                '.4.', '.5.', '.6.', '.7.',
-            ]]):
-                print(f"Freezing {name}")
-                param.requires_grad = False
+        # for name, param in model.named_parameters():
+        #     if np.any([x in name for x in [
+        #         '.0.', '.1.', '.2.', '.3.',
+        #         '.4.', '.5.', '.6.', '.7.',
+        #     ]]):
+        #         print(f"Freezing {name}")
+        #         param.requires_grad = False
 
         return cls(
             model,
@@ -253,7 +253,7 @@ class TranslationOutput:
 
         for key_name in print_out_keys:
             raw_data = [t[print_key][key_name]
-                         if key_name in t[print_key] else [] for t in output]
+                        if key_name in t[print_key] else [] for t in output]
             print_data[key_name] = [t for t in itertools.chain(*raw_data)]
 
         inner_outs = []
@@ -302,7 +302,7 @@ class TranslationOutput:
             for label, gen in zip(targets, outputs):
                 if gen.strip() == label:
                     acc_class[label] += 1
-                
+
             for key in acc_class:
                 if class_count[key] > 0:
                     acc_class[key] /= class_count[key]
@@ -330,7 +330,10 @@ class TranslationOutput:
         text_in = self.print_data["question"]
         targets = self.targets
         outputs = self.outputs
-        inner_loss = self.print_data["inner_loss"]
+        if "inner_loss" in self.print_data:
+            inner_loss = self.print_data["inner_loss"]
+        else:
+            inner_loss = None
 
         if "inner_print_out" in self.print_data:
             inner_out = self.print_data["inner_print_out"]
@@ -345,10 +348,12 @@ class TranslationOutput:
             instance_dict["question"] = text_in[k]
             instance_dict["gen_out"] = outputs[k]
             instance_dict["answer"] = targets[k]
-            instance_dict["inner_loss"] = inner_loss[k]
+
+            if inner_loss:
+                instance_dict["inner_loss"] = inner_loss[k]
             if inner_out:
                 instance_dict["inner_out"] = inner_out[k]
-            
+
             # if prefixes:
             #     instance_dict["meta"] = {}
             #     instance_dict["meta"]["prefix"] = prefixes[k]

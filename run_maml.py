@@ -75,6 +75,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
             loss = out["loss"]
             output_dict = {
                 'loss': loss,
+                'train_loss': loss.cpu()
             }
 
         else:
@@ -88,7 +89,6 @@ class MetaKnowledgeRunner(pl.LightningModule):
                 }
 
         return output_dict
-
 
     def step(self, batch, is_train: bool) -> Dict:
         """Runs a single meta-training step
@@ -161,7 +161,8 @@ class MetaKnowledgeRunner(pl.LightningModule):
             else:
                 with torch.no_grad():
                     dev_out = fmodel(dev_features, print_out)
-                    dev_out["print_out"]["inner_loss"] = [inner_train_loss.item()]
+                    dev_out["print_out"]["inner_loss"] = [
+                        inner_train_loss.item()]
                     outer_train_loss = dev_out["loss"]
                     output_dict = {
                         'loss': outer_train_loss,
@@ -220,8 +221,10 @@ class MetaKnowledgeRunner(pl.LightningModule):
                 on_epoch=True
             )
         else:
-            avg_inner_loss = torch.stack([x["inner_loss"] for x in outputs]).mean()
-            avg_outer_loss = torch.stack([x["outer_loss"] for x in outputs]).mean()
+            avg_inner_loss = torch.stack(
+                [x["inner_loss"] for x in outputs]).mean()
+            avg_outer_loss = torch.stack(
+                [x["outer_loss"] for x in outputs]).mean()
 
             self.log(
                 "avg_inner_loss",
@@ -289,11 +292,11 @@ class MetaKnowledgeRunner(pl.LightningModule):
                 on_epoch=True,
                 prog_bar=True
             )
-    
+
     def test_step(self, batch, batch_idx) -> Dict:
         print(batch["print_out"])
         return self.validation_step(batch, batch_idx)
-    
+
     def test_epoch_end(self, outputs):
         test_loss = torch.stack([x["outer_loss"] for x in outputs]).mean()
         self.log("test_loss", test_loss, on_epoch=True, prog_bar=True)
@@ -433,7 +436,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
             'Length of validation data loader %d' % len(dataloader)
         )
         return dataloader
-    
+
     def test_dataloader(self):
         """Loader to building test data.
 
@@ -472,7 +475,7 @@ def run(args):
                 metrics[key] = value.detach().item()
             except:
                 pass
-    
+
     if args.do_eval:
         if args.load_checkpoint is not None:
             trainer.test(model, ckpt_path=args.load_checkpoint)
