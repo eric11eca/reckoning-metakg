@@ -85,6 +85,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
 
         return output_dict
 
+
     def step(self, batch, is_train: bool) -> Dict:
         """Runs a single meta-training step
 
@@ -257,6 +258,32 @@ class MetaKnowledgeRunner(pl.LightningModule):
                 on_epoch=True,
                 prog_bar=True
             )
+    
+    def test_step(self, batch, batch_idx) -> Dict:
+        print(batch["print_out"])
+        return self.validation_step(batch, batch_idx)
+    
+    def test_epoch_end(self, outputs):
+        test_loss = torch.stack([x["outer_loss"] for x in outputs]).mean()
+        self.log("test_loss", test_loss, on_epoch=True, prog_bar=True)
+
+        timestr = time.strftime("%Y%m%d-%H%M%S")
+
+        out_file_name = f"test_eval_out_{timestr}.json"
+        metirc_file_name = f"test_metrics_{timestr}.json"
+
+        metrics_out = self.model.evaluate_output(
+            outputs,
+            f"{self.hparams.output_dir}/{out_file_name}",
+            f"{self.hparams.output_dir}/{metirc_file_name}")
+
+        for metric_name, metric_value in metrics_out.items():
+            self.log(
+                f"test_{metric_name}",
+                metric_value,
+                on_epoch=True,
+                prog_bar=True
+            )
 
     def configure_optimizers(self):
         """Setup the main optimizer
@@ -344,6 +371,14 @@ class MetaKnowledgeRunner(pl.LightningModule):
             data_type="dev",
             is_training=False
         )
+        self.test_data = MetaKnowledgeDataset(
+            self.model_logger,
+            self.hparams,
+            self.tokenizer,
+            self.hparams.train_dir,
+            data_type="test",
+            is_training=False
+        )
         self.model_logger.info('Dataset loaded')
 
     def train_dataloader(self):
@@ -367,6 +402,17 @@ class MetaKnowledgeRunner(pl.LightningModule):
             'Length of validation data loader %d' % len(dataloader)
         )
         return dataloader
+    
+    def test_dataloader(self):
+        """Loader to building test data.
+
+        :rtype: DataLoader
+        """
+        dataloader = self.test_data.load_dataloader()
+        self.model_logger.info(
+            'Length of test data loader %d' % len(dataloader)
+        )
+        return dataloader
 
 
 def run(args):
@@ -377,10 +423,9 @@ def run(args):
 
     metrics = {}
     model = MetaKnowledgeRunner(args)
+    trainer = setup_trainer(args)
 
     if args.do_train:
-        trainer = setup_trainer(args)
-
         if args.load_checkpoint is not None:
             trainer.fit(model, ckpt_path=args.load_checkpoint)
         else:
@@ -396,3 +441,9 @@ def run(args):
                 metrics[key] = value.detach().item()
             except:
                 pass
+    
+    if args.do_eval:
+        if args.load_checkpoint is not None:
+            trainer.test(model, ckpt_path=args.load_checkpoint)
+        else:
+            trainer.test(model)
