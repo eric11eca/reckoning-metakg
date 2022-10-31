@@ -53,7 +53,7 @@ class MetaQADataReader():
         unknown_paris = []
         for qa_item in questions.values():
             question = qa_item["question"].replace(".", "")
-            question = f"Is it true or false that {question}?"
+            question = f"Is it true, false, or unknown that {question}?"
             answer = str(qa_item["answer"]).lower()
             if answer != "unknown":
                 qa_pairs.append((question, answer))
@@ -217,9 +217,6 @@ class MetaDataLoader():
             # train_inputs.append(f"{fact[0]} fact_{i} {enc} {fact[1]}")
             train_inputs.append(f"{bos}fact_{i} {enc} {fact[1]}{eos}")
 
-        # train_inputs = [
-        #     f"[{bos}{fact[1]}{eos}" for fact in qa_data["facts"]]
-
         train_outputs = [
             fact[1] for fact in qa_data["facts"]
         ]
@@ -227,10 +224,11 @@ class MetaDataLoader():
         train_tokenized = self._tokenize_collate_fn(train_inputs)
 
         dev_inputs = [
-            f"{bos}{qa_pair[0]} {gen} {qa_pair[1]}{eos}" for qa_pair in qa_data["qa_pairs"]]
+            f"{bos}{qa_pair[0]} {gen} {qa_pair[1]}{eos}".replace("unknown", "none") for qa_pair in qa_data["qa_pairs"]]
+
         dev_inputs_eval = [
-            f"{bos}{qa_pair[0]} {gen}" for qa_pair in qa_data["qa_pairs"]]
-        dev_outputs = [str(qa_pair[1]) for qa_pair in qa_data["qa_pairs"]]
+            f"{bos}{qa_pair[0]} {gen}".replace("unknown", "none") for qa_pair in qa_data["qa_pairs"]]
+        dev_outputs = [str(qa_pair[1]).replace("unknown", "none") for qa_pair in qa_data["qa_pairs"]]
 
         dev_tokenized_input = self.tokenizer.batch_encode_plus(
             dev_inputs,
