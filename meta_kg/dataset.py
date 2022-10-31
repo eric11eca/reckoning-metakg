@@ -54,6 +54,7 @@ class MetaQADataReader():
         for qa_item in questions.values():
             question = qa_item["question"].replace(".", "")
             question = f"Is it true or false that {question}?"
+            # question = f"Is it true false, or unknown that {question}?"
             answer = str(qa_item["answer"]).lower()
             if answer != "unknown":
                 qa_pairs.append((question, answer))
@@ -135,6 +136,8 @@ class MetaKnowledgeDataset(object):
         self.dataloader = None
         self.load = False
 
+        print(self.data[:2])
+
     def __len__(self):
         return len(self.data)
 
@@ -198,6 +201,37 @@ class MetaDataLoader():
             return_tensors="pt",
             max_length=32
         )
+
+    def causal_lm_base_collator(self, batch):
+        """Batch collator for this custom class
+        :param batch: an incoming batch
+        :param tokenizer: the model tokenizer
+        :param args: the global configuration
+        """
+
+        eos = self.tokenizer.eos_token
+        bos = self.tokenizer.bos_token
+        gen = "<gen>"
+
+        facts_batch = [[fact[1] for fact in data['facts']] for data in batch]
+        questions = [f"{data['qa_pairs'][0][0]} {gen} {data['qa_pairs'][0][1]}{eos}" for data in batch]
+
+        inputs = []
+        for facts, question in zip(facts_batch, questions):
+            fact_prefix = f"{bos}"
+            for fact in facts:
+                fact_prefix += f"{fact} "
+            inputs.append(f"{fact_prefix} {question}")
+        
+        dev_tokenized_input = self.tokenizer.batch_encode_plus(
+            inputs,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+            max_length=16
+        )
+
+
 
     def causal_lm_collator(self, batch):
         """Batch collator for this custom class
