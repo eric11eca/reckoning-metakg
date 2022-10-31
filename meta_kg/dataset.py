@@ -54,12 +54,16 @@ class MetaQADataReader():
         rules = instance["rules"]
         guid = str(uuid.uuid4())
 
+        if dataset_config[args.dataset] == 3:
+            prefix = "Is it true, false, or unknown that"
+        elif dataset_config[args.dataset] == 2:
+            prefix = "Is it true or false that"
+
         qa_pairs = []
         unknown_paris = []
         for qa_item in questions.values():
             question = qa_item["question"].replace(".", "")
-            question = f"Is it true, false, or unknown that {question}?"
-            question = f"Is it true or false that {question}?"
+            question = f"{prefix} {question}?"
             answer = str(qa_item["answer"]).lower()
             if answer != "unknown":
                 qa_pairs.append((question, answer))
@@ -73,8 +77,7 @@ class MetaQADataReader():
         else:
             facts = []
             for item in qa_pairs:
-                # question = item[0].replace("Is it true, false, or unknown that ", "")
-                question = item[0].replace("Is it true or false that ", "")
+                question = item[0].replace(f"{prefix} ", "")
                 question = question.replace("?", "")
                 facts.append(kg_as_autoregressive(
                     triples, rules,
