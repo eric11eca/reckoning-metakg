@@ -1,7 +1,8 @@
+import torch
 import wandb
 import itertools
-import torch.nn as nn
 import numpy as np
+import torch.nn as nn
 
 from collections import Counter
 from pathlib import Path
@@ -133,13 +134,13 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
             model.resize_token_embeddings(len(tokenizer))
             model.config.pad_token_id = tokenizer.pad_token_id
 
-        # for name, param in model.named_parameters():
-        #     if np.any([x in name for x in [
-        #         '.0.', '.1.', '.2.', '.3.',
-        #         '.4.', '.5.', '.6.', '.7.',
-        #     ]]):
-        #         print(f"Freezing {name}")
-        #         param.requires_grad = False
+        for name, param in model.named_parameters():
+            if np.any([x in name for x in [
+                '.0.', '.1.', '.2.', '.3.',
+                #'.4.', '.5.', '.6.', '.7.',
+            ]]):
+                print(f"Freezing {name}")
+                param.requires_grad = False
 
         return cls(
             model,
@@ -165,7 +166,20 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
             return_dict=True
         )
 
-        main_out["loss"] = outputs.loss
+        logits = outputs["logits"][..., :-1, :].contiguous()
+        labels = features["input_ids"][..., 1:].contiguous()
+        label_mask = features["token_type_ids"][..., 1:].contiguous()
+
+        loss_fct = nn.CrossEntropyLoss(reduction="none")
+        losses = loss_fct(
+            logits.view(-1, logits.size(-1)),
+            labels.view(-1)
+        )
+
+        losses = losses.view(logits.size(0), logits.size(1)) * label_mask
+        loss = torch.sum(losses, axis=1) / torch.sum(label_mask, axis=1)
+
+        main_out["loss"] = loss.mean()
 
         if "evaluate" in features and features["evaluate"]:
             if "question" in print_out:
