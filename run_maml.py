@@ -13,7 +13,6 @@ from meta_kg.model import PretrainedEncoderDecoder
 from meta_kg.train import setup_trainer
 from meta_kg.utils.wandb_utils import setup_wandb
 
-
 util_logger = logging.getLogger(
     'meta_knowledge.runner'
 )
@@ -62,6 +61,8 @@ class MetaKnowledgeRunner(pl.LightningModule):
             "input_ids": batch["input_ids"].to(
                 torch.device(self.hparams.device)),
             "attention_mask": batch["attention_mask"].to(
+                torch.device(self.hparams.device)),
+            "token_type_ids": batch["token_type_ids"].to(
                 torch.device(self.hparams.device)),
             "evaluate": not is_train
         }
@@ -277,13 +278,14 @@ class MetaKnowledgeRunner(pl.LightningModule):
         step = self.global_trainin_step
         timestr = time.strftime("%Y%m%d-%H%M%S")
 
-        out_file_name = f"dev_eval_out-epoch={epoch}_step={step}_{timestr}.json"
-        metirc_file_name = f"val_metrics-epoch={epoch}_step={step}_{timestr}.json"
+        out_file_name = f"dev_out-epoch={epoch}_step={step}.json"
+        metirc_file_name = f"val_metrics-epoch={epoch}_step={step}.json"
 
         metrics_out = self.model.evaluate_output(
             outputs,
-            f"{self.hparams.output_dir}/{out_file_name}",
-            f"{self.hparams.output_dir}/{metirc_file_name}")
+            f"{self.hparams.run_dir}/{out_file_name}",
+            f"{self.hparams.run_dir}/{metirc_file_name}"
+        )
 
         for metric_name, metric_value in metrics_out.items():
             self.log(

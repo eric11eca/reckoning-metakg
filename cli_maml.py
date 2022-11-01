@@ -3,6 +3,7 @@ from __future__ import division
 from __future__ import print_function
 
 import os
+import time
 import argparse
 import logging
 
@@ -48,7 +49,7 @@ def main():
     # Training-related parameters
     parser.add_argument("--fact_batch_size", default=8, type=int,
                         help="Batch size per GPU/CPU for training.")
-    parser.add_argument("--train_batch_size", default=16, type=int,
+    parser.add_argument("--train_batch_size", default=4, type=int,
                         help="Batch size per GPU/CPU for training.")
     parser.add_argument("--predict_batch_size", default=8, type=int,
                         help="Batch size per GPU/CPU for evaluation.")
@@ -92,7 +93,7 @@ def main():
     parser.add_argument('--wandb_entity', type=str, default='causal_scaffold')
     parser.add_argument('--wandb_project', type=str, default='meta_knowledge')
     parser.add_argument('--wandb_name', type=str,
-                        default='gpt2_baseline_proofwriter_owa_natlang_unknown')
+                        default='gpt2_baseline_proofwriter_owa_natlang')
     parser.add_argument('--wandb_data', type=str,
                         default='')
     parser.add_argument("--wandb_note",
@@ -150,7 +151,11 @@ def main():
             raise ValueError(
                 "If `do_eval` is True, then `predict_dir` must be specified.")
 
-    logger.info("Using {} gpus".format(args.n_gpu))
+    timestr = time.strftime("%Y%m%d-%H%M%S")
+    run_dir = f"{args.output_dir}/{timestr}"
+    os.makedirs(run_dir, exist_ok=True)
+    args.run_dir = run_dir
+
     run(args)
 
 
