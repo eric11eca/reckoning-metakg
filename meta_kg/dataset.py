@@ -3,6 +3,7 @@ import re
 import random
 import uuid
 import string
+import torch
 import numpy as np
 
 from collections import Counter
@@ -202,15 +203,6 @@ class MetaDataLoader():
             num_workers=args.num_workers
         )
 
-    def _tokenize_collate_fn(self, batch):
-        return self.tokenizer.batch_encode_plus(
-            batch,
-            padding=True,
-            truncation=True,
-            return_tensors="pt",
-            max_length=32
-        )
-
     def causal_lm_base_collator(self, batch):
         """Batch collator for this custom class
         :param batch: an incoming batch
@@ -220,26 +212,44 @@ class MetaDataLoader():
 
         eos = self.tokenizer.eos_token
         bos = self.tokenizer.bos_token
+        pad = self.tokenizer.pad_token
         gen = "<gen>"
+        pad_id = self.tokenizer.encode(pad)
 
         facts_batch = [[fact[1] for fact in data['facts']] for data in batch]
-        questions = [
-            f"{data['qa_pairs'][0][0]} {gen} {data['qa_pairs'][0][1]}{eos}" for data in batch]
+        questions = [f"{data['qa_pairs'][0][0]}" for data in batch]
+        answers = [data['qa_pairs'][0][1] for data in batch]
 
-        inputs = []
-        for facts, question in zip(facts_batch, questions):
+        max_length = 600
+
+        input_ids_batch, attention_mask_batch, token_type_ids_batch = [], [], []
+        for facts, question, answer in zip(facts_batch, questions, answers):
             fact_prefix = f"{bos}"
             for fact in facts:
                 fact_prefix += f"{fact} "
-            inputs.append(f"{fact_prefix} {question}")
 
-        tokenized_input = self.tokenizer.batch_encode_plus(
-            inputs,
-            padding=True,
-            truncation=True,
-            return_tensors="pt",
-            max_length=16
-        )
+            input_txt = f"{fact_prefix}\n{question}"
+            output_txt = f"{answer}{eos}"
+
+            ids1 = self.tokenizer(input_txt, return_tensors="pt")["input_ids"]
+            ids2 = self.tokenizer(output_txt, return_tensors="pt")["input_ids"]
+
+            n_mask = max_length - ids1.size(1) - ids2.size(1)
+            assert n_mask >= 0, (max_length, ids1.size(1), ids2.size(1))
+            padding = torch.LongTensor(pad_id * n_mask).unsqueeze(0)
+
+            input_ids = torch.cat((ids1, ids2, padding), dim=1)
+            attention_mask = torch.LongTensor(
+                [1] * (ids1.size(1) + ids2.size(1)) + [0] * n_mask).unsqueeze(0)
+            token_type_ids = torch.LongTensor(
+                [0] * ids1.size(1) + [1] * ids2.size(1) + [0] * n_mask).unsqueeze(0)
+
+            assert input_ids.size(1) == attention_mask.size(
+                1) == token_type_ids.size(1) == max_length
+
+            input_ids_batch.append(input_ids)
+            attention_mask_batch.append(attention_mask)
+            token_type_ids_batch.append(token_type_ids)
 
         print_inputs = [data['qa_pairs'][0][0] for data in batch]
         print_outputs = [data['qa_pairs'][0][1] for data in batch]
@@ -250,9 +260,9 @@ class MetaDataLoader():
         }
 
         feature = {
-            "input_ids": tokenized_input["input_ids"],
-            "attention_mask": tokenized_input["attention_mask"],
-            "labels": tokenized_input["input_ids"],
+            "input_ids": torch.cat(input_ids_batch, dim=0),
+            "attention_mask": torch.cat(attention_mask_batch, dim=0),
+            "token_type_ids": torch.cat(token_type_ids_batch, dim=0),
             "print_out": print_out,
             "evaluate": self.evaluate
         }
