@@ -203,18 +203,43 @@ class MetaDataLoader():
             num_workers=args.num_workers
         )
 
+    def _tensorize(self, input_txt, output_txt, max_length):
+        """Converts a list of strings into a tensor of ids
+
+        :param input_txt: the input text
+        :param output_txt: the output text
+        :param max_length: the maximum length of the sequence
+        :return: the tensorized input and output
+        """
+        pad = self.tokenizer.pad_token
+        pad_id = self.tokenizer.encode(pad)
+
+        ids1 = self.tokenizer(input_txt, return_tensors="pt")["input_ids"]
+        ids2 = self.tokenizer(output_txt, return_tensors="pt")["input_ids"]
+
+        n_mask = max_length - ids1.size(1) - ids2.size(1)
+        assert n_mask >= 0, (max_length, ids1.size(1), ids2.size(1))
+        padding = torch.LongTensor(pad_id * n_mask).unsqueeze(0)
+
+        input_ids = torch.cat((ids1, ids2, padding), dim=1)
+        attention_mask = torch.LongTensor(
+            [1] * (ids1.size(1) + ids2.size(1)) + [0] * n_mask).unsqueeze(0)
+        token_type_ids = torch.LongTensor(
+            [0] * ids1.size(1) + [1] * ids2.size(1) + [0] * n_mask).unsqueeze(0)
+
+        assert input_ids.size(1) == attention_mask.size(
+            1) == token_type_ids.size(1) == max_length
+
+        return input_ids, attention_mask, token_type_ids
+
     def causal_lm_base_collator(self, batch):
         """Batch collator for this custom class
         :param batch: an incoming batch
         :param tokenizer: the model tokenizer
         :param args: the global configuration
         """
-
         eos = self.tokenizer.eos_token
         bos = self.tokenizer.bos_token
-        pad = self.tokenizer.pad_token
-        gen = "<gen>"
-        pad_id = self.tokenizer.encode(pad)
 
         facts_batch = [[fact[1] for fact in data['facts']] for data in batch]
         questions = [f"{data['qa_pairs'][0][0]}" for data in batch]
@@ -231,21 +256,8 @@ class MetaDataLoader():
             input_txt = f"{fact_prefix}\n{question}"
             output_txt = f"{answer}{eos}"
 
-            ids1 = self.tokenizer(input_txt, return_tensors="pt")["input_ids"]
-            ids2 = self.tokenizer(output_txt, return_tensors="pt")["input_ids"]
-
-            n_mask = max_length - ids1.size(1) - ids2.size(1)
-            assert n_mask >= 0, (max_length, ids1.size(1), ids2.size(1))
-            padding = torch.LongTensor(pad_id * n_mask).unsqueeze(0)
-
-            input_ids = torch.cat((ids1, ids2, padding), dim=1)
-            attention_mask = torch.LongTensor(
-                [1] * (ids1.size(1) + ids2.size(1)) + [0] * n_mask).unsqueeze(0)
-            token_type_ids = torch.LongTensor(
-                [0] * ids1.size(1) + [1] * ids2.size(1) + [0] * n_mask).unsqueeze(0)
-
-            assert input_ids.size(1) == attention_mask.size(
-                1) == token_type_ids.size(1) == max_length
+            input_ids, attention_mask, token_type_ids = self._tensorize(
+                input_txt, output_txt, max_length)
 
             input_ids_batch.append(input_ids)
             attention_mask_batch.append(attention_mask)
@@ -275,55 +287,63 @@ class MetaDataLoader():
         :param tokenizer: the model tokenizer
         :param args: the global configuration
         """
-
         eos = self.tokenizer.eos_token
         bos = self.tokenizer.bos_token
-        gen = "<gen>"
-        enc = "<enc>"
-
         qa_data = batch[0]
-        train_inputs = []
+        max_length = 32
+
+        train_input_ids_batch = []
+        train_attention_mask_batch = []
+        train_token_type_ids_batch = []
+
         for i, fact in enumerate(qa_data["facts"]):
-            # train_inputs.append(f"{fact[0]} fact_{i} {enc} {fact[1]}")
-            train_inputs.append(f"{bos}fact_{i} {enc} {fact[1]}{eos}")
+            # train_input_txt = f"{fact[0]} fact_{i} {fact[1]}"
+            train_input_txt = f"{bos}fact_{i} is {fact[1]}"
+            train_output_txt = f"{fact[1]}{eos}"
+            input_ids, attention_mask, token_type_ids = self._tensorize(
+                train_input_txt, train_output_txt, max_length)
+            train_input_ids_batch.append(input_ids)
+            train_attention_mask_batch.append(attention_mask)
+            train_token_type_ids_batch.append(token_type_ids)
 
-        train_outputs = [
-            fact[1] for fact in qa_data["facts"]
-        ]
+        dev_input_ids_batch = []
+        dev_attention_mask_batch = []
+        dev_token_type_ids_batch = []
 
-        train_tokenized = self._tokenize_collate_fn(train_inputs)
-
-        dev_inputs = [
-            f"{bos}{qa_pair[0]} {gen} {qa_pair[1]}{eos}" for qa_pair in qa_data["qa_pairs"]]
-
-        dev_inputs_eval = [
-            f"{bos}{qa_pair[0]} {gen}" for qa_pair in qa_data["qa_pairs"]]
-        dev_outputs = [str(qa_pair[1])
-                       for qa_pair in qa_data["qa_pairs"]]
-
-        dev_tokenized_input = self.tokenizer.batch_encode_plus(
-            dev_inputs,
-            padding=True,
-            truncation=True,
-            return_tensors="pt",
-            max_length=16
-        )
+        for qa_pair in qa_data["qa_pairs"]:
+            dev_input_txt = f"{bos}{qa_pair[0]}"
+            dev_output_txt = f"{qa_pair[1]}{eos}"
+            input_ids, attention_mask, token_type_ids = self._tensorize(
+                dev_input_txt, dev_output_txt, max_length)
+            dev_input_ids_batch.append(input_ids)
+            dev_attention_mask_batch.append(attention_mask)
+            dev_token_type_ids_batch.append(token_type_ids)
 
         feature = {
-            "input_ids": dev_tokenized_input["input_ids"],
-            "attention_mask": dev_tokenized_input["attention_mask"],
-            "labels": dev_tokenized_input["input_ids"],
-            "train_input_ids": train_tokenized["input_ids"],
-            "train_attention_mask": train_tokenized["attention_mask"],
+            "input_ids": torch.cat(dev_input_ids_batch, dim=0),
+            "attention_mask": torch.cat(dev_attention_mask_batch, dim=0),
+            "token_type_ids": torch.cat(dev_token_type_ids_batch, dim=0),
+            "train_input_ids": torch.cat(train_input_ids_batch, dim=0),
+            "train_attention_mask": torch.cat(train_attention_mask_batch, dim=0),
+            "train_token_type_ids": torch.cat(train_token_type_ids_batch, dim=0),
             "print_out": {"guid": [qa_data["guid"]]},
             "evaluate": self.evaluate
         }
 
         if self.evaluate:
+            train_inputs = [
+                fact[0] for fact in qa_data["facts"]]
+            train_outputs = [
+                fact[1] for fact in qa_data["facts"]]
+            dev_inputs_eval = [
+                f"{bos}{qa_pair[0]}" for qa_pair in qa_data["qa_pairs"]]
+            dev_outputs = [str(qa_pair[1])
+                           for qa_pair in qa_data["qa_pairs"]]
+
             feature["print_out"].update({
                 "question": dev_inputs_eval,
                 "answer": dev_outputs,
-                # "prefix": prefix,
+                "prefix": [self.args.dataset],
             })
 
             feature["inner_print_out"] = {

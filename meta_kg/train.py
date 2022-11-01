@@ -34,7 +34,7 @@ def setup_trainer(args) -> pl.Trainer:
         os.mkdir(args.output_dir)
 
     checkpoint_callback = ModelCheckpoint(
-        dirpath=args.output_dir,
+        dirpath=args.run_dir,
         monitor=args.callback_monitor,
         mode=mode,
         save_top_k=1,
@@ -100,7 +100,7 @@ def setup_trainer(args) -> pl.Trainer:
         callbacks=callbacks,
         num_sanity_val_steps=4,
         log_every_n_steps=5,
-        # val_check_interval=0.1,
+        val_check_interval=0.25,
         # auto_lr_find=args.auto_lr_find,
         # amp_level=args.opt_level,
         # amp_backend=args.amp_backend,

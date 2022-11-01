@@ -341,6 +341,7 @@ class TranslationOutput:
 
         """
         guids = self.print_data["guid"]
+        prefixes = self.prefixes
         text_in = self.print_data["question"]
         targets = self.targets
         outputs = self.outputs
@@ -359,6 +360,7 @@ class TranslationOutput:
         for k, identifier in enumerate(guids):
             instance_dict = {}
             instance_dict["guid"] = identifier
+            instance_dict["prefix"] = prefixes[k]
             instance_dict["question"] = text_in[k]
             instance_dict["gen_out"] = outputs[k]
             instance_dict["answer"] = targets[k]
@@ -368,9 +370,6 @@ class TranslationOutput:
             if inner_out:
                 instance_dict["inner_out"] = inner_out[k]
 
-            # if prefixes:
-            #     instance_dict["meta"] = {}
-            #     instance_dict["meta"]["prefix"] = prefixes[k]
             # if label_scores:
             #     instance_dict["label_scores"] = label_scores[k]
 

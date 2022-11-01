@@ -111,6 +111,8 @@ class MetaKnowledgeRunner(pl.LightningModule):
                 torch.device(self.hparams.device)),
             "attention_mask": batch["train_attention_mask"].to(
                 torch.device(self.hparams.device)),
+            "token_type_ids": batch["train_token_type_ids"].to(
+                torch.device(self.hparams.device)),
             "evaluate": False
         }
 
@@ -142,6 +144,8 @@ class MetaKnowledgeRunner(pl.LightningModule):
                 "input_ids": batch["input_ids"].to(
                     torch.device(self.hparams.device)),
                 "attention_mask": batch["attention_mask"].to(
+                    torch.device(self.hparams.device)),
+                "token_type_ids": batch["token_type_ids"].to(
                     torch.device(self.hparams.device)),
                 "evaluate": not is_train
             }
