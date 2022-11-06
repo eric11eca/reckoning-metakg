@@ -10,11 +10,16 @@ from collections import Counter
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 
 from .utils.py_io import read_jsonl
+from .utils.datastructure import labels_to_bimap
 
 dataset_config = {
     "proofwriter_owa_natlang": 3,
     "proofwriter_cwa_natlang": 2,
 }
+
+
+LABELS = ["true", "false", "unknown"]
+LABEL_TO_ID, ID_TO_LABEL = labels_to_bimap(LABELS)
 
 
 def kg_as_span_reconstruction(triples, rules):
@@ -71,7 +76,11 @@ class MetaQADataReader():
             else:
                 unknown_paris.append((question, answer))
 
-        qa_pairs += random.choices(unknown_paris, k=len(unknown_paris) // 2)
+        if len(unknown_paris) > 0:
+            qa_pairs += random.choices(unknown_paris,
+                                       k=len(unknown_paris) // 2)
+
+        # qa_pairs += unknown_paris
 
         if args.input_format == "mlm":
             facts = kg_as_span_reconstruction(triples, rules)
@@ -263,10 +272,18 @@ class MetaDataLoader():
             attention_mask_batch.append(attention_mask)
             token_type_ids_batch.append(token_type_ids)
 
+        labels = torch.LongTensor([LABEL_TO_ID[x] for x in answers])
+        labels = torch.nn.functional.one_hot(
+            labels, 
+            num_classes=dataset_config[self.args.dataset]
+        ).to(torch.float)
+        
+
         print_inputs = [data['qa_pairs'][0][0] for data in batch]
         print_outputs = [data['qa_pairs'][0][1] for data in batch]
         print_out = {
             "guid": [data['guid'] for data in batch],
+            "prefix": [self.args.dataset for data in batch],
             "question": print_inputs,
             "answer": print_outputs,
         }
@@ -275,6 +292,7 @@ class MetaDataLoader():
             "input_ids": torch.cat(input_ids_batch, dim=0),
             "attention_mask": torch.cat(attention_mask_batch, dim=0),
             "token_type_ids": torch.cat(token_type_ids_batch, dim=0),
+            "labels": labels,
             "print_out": print_out,
             "evaluate": self.evaluate
         }
@@ -290,15 +308,15 @@ class MetaDataLoader():
         eos = self.tokenizer.eos_token
         bos = self.tokenizer.bos_token
         qa_data = batch[0]
-        max_length = 32
+        max_length = 48
 
         train_input_ids_batch = []
         train_attention_mask_batch = []
         train_token_type_ids_batch = []
 
         for i, fact in enumerate(qa_data["facts"]):
-            # train_input_txt = f"{fact[0]} fact_{i} {fact[1]}"
-            train_input_txt = f"{bos}fact_{i} is {fact[1]}"
+            train_input_txt = f"{bos}{fact[0]} fact_{i}: {fact[1]}"
+            # train_input_txt = f"{bos}fact_{i} is {fact[1]}"
             train_output_txt = f"{fact[1]}{eos}"
             input_ids, attention_mask, token_type_ids = self._tensorize(
                 train_input_txt, train_output_txt, max_length)
@@ -309,6 +327,7 @@ class MetaDataLoader():
         dev_input_ids_batch = []
         dev_attention_mask_batch = []
         dev_token_type_ids_batch = []
+        labels_batch = []
 
         for qa_pair in qa_data["qa_pairs"]:
             dev_input_txt = f"{bos}{qa_pair[0]}"
@@ -318,11 +337,17 @@ class MetaDataLoader():
             dev_input_ids_batch.append(input_ids)
             dev_attention_mask_batch.append(attention_mask)
             dev_token_type_ids_batch.append(token_type_ids)
+            labels = torch.nn.functional.one_hot(
+                torch.tensor([LABEL_TO_ID[str(qa_pair[1])]]), 
+                num_classes=dataset_config[self.args.dataset]
+            ).to(torch.float)
+            labels_batch.append(labels)
 
         feature = {
             "input_ids": torch.cat(dev_input_ids_batch, dim=0),
             "attention_mask": torch.cat(dev_attention_mask_batch, dim=0),
             "token_type_ids": torch.cat(dev_token_type_ids_batch, dim=0),
+            "labels": torch.cat(labels_batch, dim=0),
             "train_input_ids": torch.cat(train_input_ids_batch, dim=0),
             "train_attention_mask": torch.cat(train_attention_mask_batch, dim=0),
             "train_token_type_ids": torch.cat(train_token_type_ids_batch, dim=0),
