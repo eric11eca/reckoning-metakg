@@ -20,7 +20,7 @@ def main():
     # Basic parameters
     parser.add_argument("--train_dir", default="data")
     parser.add_argument("--predict_dir", default="data")
-    parser.add_argument("--dataset", default="proofwriter_owa_natlang")
+    parser.add_argument("--dataset", default="proofwriter_cwa_natlang")
     parser.add_argument("--model_name_or_path",
                         default="gpt2", required=False)
     parser.add_argument("--model_type",
@@ -34,9 +34,9 @@ def main():
     parser.add_argument("--baseline", action='store_true')
 
     # Meta Learn parameters
-    parser.add_argument('--inner_lr', type=float, default=5e-5,
+    parser.add_argument('--inner_lr', type=float, default=1e-5,
                         help='Inner loop learning rate for SGD')
-    parser.add_argument("--n_inner_iter", default=2, type=int,
+    parser.add_argument("--n_inner_iter", default=1, type=int,
                         help="Total number of inner training epochs to perform.")
 
     # Model parameters
@@ -49,9 +49,9 @@ def main():
     # Training-related parameters
     parser.add_argument("--fact_batch_size", default=8, type=int,
                         help="Batch size per GPU/CPU for training.")
-    parser.add_argument("--train_batch_size", default=4, type=int,
+    parser.add_argument("--train_batch_size", default=1, type=int,
                         help="Batch size per GPU/CPU for training.")
-    parser.add_argument("--predict_batch_size", default=8, type=int,
+    parser.add_argument("--predict_batch_size", default=1, type=int,
                         help="Batch size per GPU/CPU for evaluation.")
     parser.add_argument("--learning_rate", default=3e-5, type=float,
                         help="The initial learning rate for Adam.")
@@ -74,6 +74,8 @@ def main():
     parser.add_argument('--device_idx', type=int, default=0)
     parser.add_argument('--load_checkpoint', type=str,
                         default=None, help='path to checkpoint')
+    parser.add_argument('--classifier', action='store_true', default=False,
+                        help='whether to use the classifier mode')
 
     # Other parameters
     parser.add_argument("--verbose", action='store_true',
@@ -93,7 +95,7 @@ def main():
     parser.add_argument('--wandb_entity', type=str, default='causal_scaffold')
     parser.add_argument('--wandb_project', type=str, default='meta_knowledge')
     parser.add_argument('--wandb_name', type=str,
-                        default='gpt2_baseline_proofwriter_owa_natlang')
+                        default='classifier_dqkg_cwa')
     parser.add_argument('--wandb_data', type=str,
                         default='')
     parser.add_argument("--wandb_note",
