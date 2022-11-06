@@ -1,3 +1,8 @@
+# Logger files and saved checkpoints
+output/
+wandb/
+lightning_logs/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
