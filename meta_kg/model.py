@@ -7,10 +7,11 @@ import torch.nn as nn
 from collections import Counter
 from pathlib import Path
 from typing import Dict
-from dataclasses import dataclass
 from evaluate import load
+from dataclasses import dataclass
 from sklearn.metrics import accuracy_score
 from transformers import TextGenerationPipeline
+from torch.nn import BCEWithLogitsLoss
 
 from transformers import (
     AutoConfig,
@@ -18,20 +19,23 @@ from transformers import (
     T5ForConditionalGeneration,
     GPT2LMHeadModel,
     GPTJForCausalLM,
-    GPTNeoForCausalLM
+    GPTNeoForCausalLM,
+    AutoModelForCausalLM,
+    GPT2ForSequenceClassification
 )
 
 from meta_kg.utils.py_io import write_json
+from meta_kg.dataset import ID_TO_LABEL
+from meta_kg.dataset import dataset_config
 
 model_class_registry = {
     "t5": T5ForConditionalGeneration,
     "gpt2": GPT2LMHeadModel,
-    "gptj": GPTJForCausalLM,
-    "gpt-neo": GPTNeoForCausalLM,
+    "gptj": AutoModelForCausalLM,
+    "gpt-neo": AutoModelForCausalLM,
 }
 
 exact_match_metric = load("exact_match")
-
 
 class GeneratorModel():
     """Convenient class for implementing a standard generator model"""
@@ -108,6 +112,8 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
             return_full_text=False,
             max_new_tokens=32,
         )
+        num_labels = dataset_config[global_config.dataset]
+        self.score = nn.Linear(model_config.n_embd, num_labels, bias=False)
 
     @classmethod
     def from_config(cls, config):
@@ -115,10 +121,14 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
 
         :param config: the global configuration
         """
-
+        # if config.classifier:
+        #     num_labels = dataset_config[config.dataset]
+        #     model = GPT2ForSequenceClassification.from_pretrained(
+        #         config.model_name_or_path, num_labels=num_labels)
+        # else:
         model_class = model_class_registry[config.model_type]
-
         model = model_class.from_pretrained(config.model_name_or_path)
+
         tokenizer = AutoTokenizer.from_pretrained(
             config.model_name_or_path)
         model_config = AutoConfig.from_pretrained(config.model_name_or_path)
@@ -133,11 +143,14 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
 
             model.resize_token_embeddings(len(tokenizer))
             model.config.pad_token_id = tokenizer.pad_token_id
+        
+        if config.classifier:
+            model.config.problem_type = "multi_label_classification"
 
         for name, param in model.named_parameters():
             if np.any([x in name for x in [
                 '.0.', '.1.', '.2.', '.3.',
-                #'.4.', '.5.', '.6.', '.7.',
+                '.4.', '.5.', '.6.', '.7.',
             ]]):
                 print(f"Freezing {name}")
                 param.requires_grad = False
@@ -149,7 +162,7 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
             config,
         )
 
-    def forward(self, features, print_out):
+    def forward(self, features, print_out, is_inner=False):
         """A modified version of forward method for the underlying
            `ConditionalSequenceGeneration` model. It combines loss
            measurement and generation into one step.
@@ -158,36 +171,52 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
         """
         main_out = {"print_out": {}}
         main_out["print_out"].update(print_out)
+        labels = features["input_ids"]
 
         outputs = self.model(
             input_ids=features["input_ids"],
             attention_mask=features["attention_mask"],
-            labels=features["input_ids"],
+            labels=labels,
+            output_hidden_states=True,
             return_dict=True
         )
 
-        logits = outputs["logits"][..., :-1, :].contiguous()
-        labels = features["input_ids"][..., 1:].contiguous()
-        label_mask = features["token_type_ids"][..., 1:].contiguous()
+        if self.global_config.classifier and not is_inner:
+            input_ids = features["input_ids"]
+            logits = self.score(outputs["hidden_states"][-1])
+            batch_size, _ = input_ids.shape[:2]
+            sequence_lengths = torch.ne(input_ids, self.model.config.pad_token_id).sum(-1) - 1
+            pooled_logits = logits[torch.arange(batch_size, device=logits.device), sequence_lengths]
+            loss_fct = BCEWithLogitsLoss()
+            loss = loss_fct(pooled_logits, features["labels"])
+            main_out["loss"] = loss
+            main_out["logits"] = pooled_logits
+        else:
+            logits = outputs["logits"][..., :-1, :].contiguous()
+            labels = features["input_ids"][..., 1:].contiguous()
+            label_mask = features["token_type_ids"][..., 1:].contiguous()
 
-        loss_fct = nn.CrossEntropyLoss(reduction="none")
-        losses = loss_fct(
-            logits.view(-1, logits.size(-1)),
-            labels.view(-1)
-        )
+            loss_fct = nn.CrossEntropyLoss(reduction="none")
+            losses = loss_fct(
+                logits.view(-1, logits.size(-1)),
+                labels.view(-1)
+            )
 
-        losses = losses.view(logits.size(0), logits.size(1)) * label_mask
-        loss = torch.sum(losses, axis=1) / torch.sum(label_mask, axis=1)
-
-        main_out["loss"] = loss.mean()
+            losses = losses.view(logits.size(0), logits.size(1)) * label_mask
+            loss = torch.sum(losses, axis=1) / torch.sum(label_mask, axis=1)
+            main_out["loss"] = loss.mean()
 
         if "evaluate" in features and features["evaluate"]:
-            if "question" in print_out:
-                main_out["print_out"]["gen_out"] = [
-                    self.pipe(q)[0]["generated_text"].strip() for q in main_out["print_out"]["question"]]
+            if self.global_config.classifier:
+                pred = main_out["logits"].argmax(axis=1).cpu().numpy().tolist()
+                main_out["print_out"]["gen_out"] = [ID_TO_LABEL[p] for p in pred]
             else:
-                main_out["print_out"]["gen_out"] = [
-                    self.pipe(q)[0]["generated_text"].strip() for q in main_out["print_out"]["prompt"]]
+                if "question" in print_out:
+                    main_out["print_out"]["gen_out"] = [
+                        self.pipe(q)[0]["generated_text"].strip() for q in main_out["print_out"]["question"]]
+                else:
+                    main_out["print_out"]["gen_out"] = [
+                        self.pipe(q)[0]["generated_text"].strip() for q in main_out["print_out"]["prompt"]]
 
         return main_out
 

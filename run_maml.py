@@ -105,7 +105,6 @@ class MetaKnowledgeRunner(pl.LightningModule):
         )
 
         print_out = batch["print_out"]
-
         train_features = {
             "input_ids": batch["train_input_ids"].to(
                 torch.device(self.hparams.device)),
@@ -126,18 +125,18 @@ class MetaKnowledgeRunner(pl.LightningModule):
             track_higher_grads=is_train
         ) as (fmodel, diffopt):
             for _ in range(self.hparams.n_inner_iter):
-                train_out = fmodel(train_features, print_out)
+                train_out = fmodel(train_features, print_out, is_inner=True)
                 train_loss = train_out["loss"]
                 diffopt.step(train_loss)
 
             with torch.no_grad():
                 if is_train:
-                    train_pred = fmodel(train_features, print_out)
+                    train_pred = fmodel(train_features, print_out, is_inner=True)
                     inner_train_loss = train_pred["loss"].cpu()
                 else:
                     # train_features["evaluate"] = True
                     inner_print_out = batch["inner_print_out"]
-                    train_pred = fmodel(train_features, inner_print_out)
+                    train_pred = fmodel(train_features, inner_print_out, is_inner=True)
                     inner_train_loss = train_pred["loss"].cpu()
 
             dev_features = {
@@ -150,7 +149,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
                 "evaluate": not is_train
             }
 
-            if "labels" in batch:
+            if "labels" in batch and self.hparams.classifier:
                 dev_features["labels"] = batch["labels"].to(
                     torch.device(self.hparams.device))
 
