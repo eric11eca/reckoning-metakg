@@ -6,6 +6,7 @@ import string
 import torch
 import numpy as np
 
+from pprint import pprint
 from collections import Counter
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 
@@ -13,13 +14,25 @@ from .utils.py_io import read_jsonl
 from .utils.datastructure import labels_to_bimap
 
 dataset_config = {
-    "proofwriter_owa_natlang": 3,
-    "proofwriter_cwa_natlang": 2,
+    "clutrr1": {
+        "labels": ["yes", "no", "maybe"],
+        "label_to_id": {"yes": 0, "no": 1, "maybe": 2},
+        "id_to_label": {0: "yes", 1: "no", 2: "maybe"},
+        "num_labels": 3
+    },
+    "proofwriter_owa_natlang": {
+        "labels": ["true", "false", "unknown"],
+        "label_to_id": {"true": 0, "false": 1, "unknown": 2},
+        "id_to_label": {0: "true", 1: "false", 2: "unknown"},
+        "num_labels": 3
+    },
+    "proofwriter_cwa_natlang": {
+        "labels": ["true", "false"],
+        "label_to_id": {"true": 0, "false": 1},
+        "id_to_label": {0: "true", 1: "false"},
+        "num_labels": 2
+    },
 }
-
-
-LABELS = ["true", "false", "unknown"]
-LABEL_TO_ID, ID_TO_LABEL = labels_to_bimap(LABELS)
 
 
 def kg_as_span_reconstruction(triples, rules):
@@ -43,7 +56,7 @@ def kg_as_autoregressive(triples, rules, prefix="new fact: "):
     return facts
 
 
-class MetaQADataReader():
+class ProofWriterDataReader():
     """Custom dataset loader for QA problems with associated knowledge facts."""
 
     @staticmethod
@@ -117,8 +130,70 @@ class MetaQADataReader():
 
         return total_qa_data
 
+class ClutrrDataReader():
+    """Custom dataset loader for QA problems with associated knowledge facts."""
+
+    @staticmethod
+    def _read(instance, args):
+        """Reads a single json line from the target file. Modify here when the json schema changes
+
+        :param instance: the instance to be read
+        :param args: the configuration arguments
+        :rtype instance: situation_modeling.readers.input_example.InputBase
+        """
+
+        questions = instance["questions"]
+        story = instance["facts"]
+        guid = str(uuid.uuid4())
+        prefix = "Is it true that"
+        
+        qa_pairs = []
+        # unknown_paris = []
+        for qa_item in questions:
+            question = qa_item[0].replace(".", "")
+            question = f"{prefix} {question}?"
+            answer = str(qa_item[1]).lower()
+            qa_pairs.append((question, answer))
+            # if answer != "unknown":
+            #     qa_pairs.append((question, answer))
+            # else:
+            #     unknown_paris.append((question, answer))
+    
+        facts = []
+        for item in qa_pairs:
+            question = item[0].replace(f"{prefix} ", "")
+            question = question.replace("?", "")
+            facts.append([(
+                f"To determine if {question}, a person needs to know",
+                fact) for fact in story])
+
+        return [{"guid": guid, "qa_pairs": [qa_pairs[i]], "facts": facts[i]} for i in range(len(qa_pairs))]
+
+    @classmethod
+    def jsonl_file_reader(cls, path, config):
+        """The method responsible for parsing in the input file. Implemented here
+        to make the overall pipeline more transparent.
+
+        :param path: the path to the target data file
+        :param evaluation: indicator as to where this is an evaluation file (based on name)
+        :param config: the configuration
+        """
+        total_data = read_jsonl(path)
+
+        total_qa_data = []
+        for instance in total_data:
+            qa_data = cls._read(instance, config)
+
+            total_qa_data += qa_data
+        
+        for data in total_qa_data[:3]:
+            pprint(data)
+
+        return total_qa_data
+
 
 def meta_qa_data_loader(
+    task_name: str,
     data_path: str,
     split: str,
     evaluate=False
@@ -131,8 +206,14 @@ def meta_qa_data_loader(
     :param evaluate: whether or not this is an evaluation split
     :param tokenizer: the model tokenizer, for possibly checking truncation
     """
+    reader  = {
+        "proofwriter_owa_natlang": ProofWriterDataReader,
+        "proofwriter_cwa_natlang": ProofWriterDataReader,
+        "clutrr1": ClutrrDataReader
+    }
+
     target_data = os.path.join(data_path, split+".jsonl")
-    data_container = MetaQADataReader.jsonl_file_reader(
+    data_container = reader[task_name].jsonl_file_reader(
         target_data,
         evaluate=evaluate
     )
@@ -146,20 +227,27 @@ class MetaKnowledgeDataset(object):
         self.data_type = data_type
         self.task_name = args.dataset
         self.args = args
-        self.data = self.read_data_from_file()
-
+        
+        reader_classes = {
+            "proofwriter_owa_natlang": ProofWriterDataReader,
+            "proofwriter_cwa_natlang": ProofWriterDataReader,
+            "clutrr1": ClutrrDataReader
+        }
+        self.reader = reader_classes[self.task_name]
         self.is_training = is_training
         self.logger = logger
         self.tokenizer = tokenizer
         self.dataloader = None
         self.load = False
 
+        self.data = self.read_data_from_file()
+
     def __len__(self):
         return len(self.data)
 
     def read_data_from_file(self):
         file_path = f"{self.data_path}/{self.task_name}/{self.data_type}.jsonl"
-        file_data = MetaQADataReader.jsonl_file_reader(file_path, self.args)
+        file_data = self.reader.jsonl_file_reader(file_path, self.args)
         return file_data
 
     def flatten(self, answers):
@@ -185,9 +273,12 @@ class MetaKnowledgeDataset(object):
 class MetaDataLoader():
     def __init__(self, args, dataset, tokenizer, is_training):
         self.args = args
+        self.task = args.dataset
         self.dataset = dataset
         self.tokenizer = tokenizer
         self.evaluate = not is_training
+        self.num_classes = dataset_config[self.task]["num_labels"]
+        self.label_to_id = dataset_config[self.task]["label_to_id"]
 
         if is_training:
             sampler = RandomSampler(dataset)
@@ -272,10 +363,10 @@ class MetaDataLoader():
             attention_mask_batch.append(attention_mask)
             token_type_ids_batch.append(token_type_ids)
 
-        labels = torch.LongTensor([LABEL_TO_ID[x] for x in answers])
+        labels = torch.LongTensor([self.label_to_id[x] for x in answers])
         labels = torch.nn.functional.one_hot(
             labels, 
-            num_classes=dataset_config[self.args.dataset]
+            num_classes=self.num_classes
         ).to(torch.float)
         
 
@@ -315,8 +406,8 @@ class MetaDataLoader():
         train_token_type_ids_batch = []
 
         for i, fact in enumerate(qa_data["facts"]):
-            train_input_txt = f"{bos}{fact[0]} fact_{i}: {fact[1]}"
-            # train_input_txt = f"{bos}fact_{i} is {fact[1]}"
+            # train_input_txt = f"{bos}{fact[0]} fact_{i}: {fact[1]}"
+            train_input_txt = f"{bos}fact_{i} is {fact[1]}"
             train_output_txt = f"{fact[1]}{eos}"
             input_ids, attention_mask, token_type_ids = self._tensorize(
                 train_input_txt, train_output_txt, max_length)
@@ -338,8 +429,8 @@ class MetaDataLoader():
             dev_attention_mask_batch.append(attention_mask)
             dev_token_type_ids_batch.append(token_type_ids)
             labels = torch.nn.functional.one_hot(
-                torch.tensor([LABEL_TO_ID[str(qa_pair[1])]]), 
-                num_classes=dataset_config[self.args.dataset]
+                torch.tensor([self.label_to_id[str(qa_pair[1])]]), 
+                num_classes=self.num_classes
             ).to(torch.float)
             labels_batch.append(labels)
 
