@@ -2,6 +2,7 @@ import time
 import torch
 import higher
 import logging
+import numpy as np
 import pytorch_lightning as pl
 
 from typing import Dict
@@ -11,6 +12,7 @@ from transformers import get_linear_schedule_with_warmup
 from meta_kg.dataset import MetaKnowledgeDataset
 from meta_kg.model import PretrainedEncoderDecoder
 from meta_kg.train import setup_trainer
+from meta_kg.utils.py_io import write_json
 from meta_kg.utils.wandb_utils import setup_wandb
 
 util_logger = logging.getLogger(
@@ -45,6 +47,20 @@ class MetaKnowledgeRunner(pl.LightningModule):
         self.model_logger.info(
             f'Loaded runner instance, global_epoch_counter={self.global_epoch_counter}'
         )
+
+        metadata = {
+            "task": config.dataset,
+            "model": config.model_name_or_path,
+            "model_type": config.model_type,
+            "baseline": config.baseline,
+            "inner_lr": config.inner_lr,
+            "n_inner_iter": config.n_inner_iter,
+            "learning_rate": config.learning_rate,
+            "classifier": config.classifier,
+            "wandb_name": config.wandb_name,
+        }
+
+        write_json(metadata, f"{config.run_dir}/metadata.json")
 
     def base_step(self, batch, is_train: bool) -> Dict:
         """Runs a single training step
@@ -124,19 +140,33 @@ class MetaKnowledgeRunner(pl.LightningModule):
             copy_initial_weights=False,
             track_higher_grads=is_train
         ) as (fmodel, diffopt):
+            for name, param in fmodel.named_parameters():
+                if np.any([x in name for x in [
+                    '.0.', '.1.', '.2.', '.3.',
+                    '.4.', '.5.', '.6.', '.7.',
+                ]]):
+                    param.requires_grad = False
+                else:
+                    param.requires_grad = True
             for _ in range(self.hparams.n_inner_iter):
                 train_out = fmodel(train_features, print_out, is_inner=True)
                 train_loss = train_out["loss"]
+                if not train_loss.requires_grad:
+                    train_loss.requires_grad = True
                 diffopt.step(train_loss)
 
             with torch.no_grad():
+                for name, param in fmodel.named_parameters():
+                    param.requires_grad = False
                 if is_train:
-                    train_pred = fmodel(train_features, print_out, is_inner=True)
+                    train_pred = fmodel(
+                        train_features, print_out, is_inner=True)
                     inner_train_loss = train_pred["loss"].cpu()
                 else:
                     # train_features["evaluate"] = True
                     inner_print_out = batch["inner_print_out"]
-                    train_pred = fmodel(train_features, inner_print_out, is_inner=True)
+                    train_pred = fmodel(
+                        train_features, inner_print_out, is_inner=True)
                     inner_train_loss = train_pred["loss"].cpu()
 
             dev_features = {
@@ -163,7 +193,10 @@ class MetaKnowledgeRunner(pl.LightningModule):
                 }
 
             else:
+                fmodel.eval()
                 with torch.no_grad():
+                    for name, param in fmodel.named_parameters():
+                        param.requires_grad = False
                     dev_out = fmodel(dev_features, print_out)
                     dev_out["print_out"]["inner_loss"] = [
                         inner_train_loss.item()]
@@ -279,7 +312,6 @@ class MetaKnowledgeRunner(pl.LightningModule):
 
         epoch = self.global_epoch_counter
         step = self.global_trainin_step
-        timestr = time.strftime("%Y%m%d-%H%M%S")
 
         out_file_name = f"dev_out-epoch={epoch}_step={step}.json"
         metirc_file_name = f"val_metrics-epoch={epoch}_step={step}.json"
@@ -299,22 +331,21 @@ class MetaKnowledgeRunner(pl.LightningModule):
             )
 
     def test_step(self, batch, batch_idx) -> Dict:
-        print(batch["print_out"])
+        # print(batch["print_out"])
         return self.validation_step(batch, batch_idx)
 
     def test_epoch_end(self, outputs):
         test_loss = torch.stack([x["outer_loss"] for x in outputs]).mean()
         self.log("test_loss", test_loss, on_epoch=True, prog_bar=True)
 
-        timestr = time.strftime("%Y%m%d-%H%M%S")
-
-        out_file_name = f"test_eval_out_{timestr}.json"
-        metirc_file_name = f"test_metrics_{timestr}.json"
+        out_file_name = f"test_eval_out.json"
+        metirc_file_name = f"test_metrics.json"
 
         metrics_out = self.model.evaluate_output(
             outputs,
-            f"{self.hparams.output_dir}/{out_file_name}",
-            f"{self.hparams.output_dir}/{metirc_file_name}")
+            f"{self.hparams.run_dir}/{out_file_name}",
+            f"{self.hparams.run_dir}/{metirc_file_name}"
+        )
 
         for metric_name, metric_value in metrics_out.items():
             self.log(
