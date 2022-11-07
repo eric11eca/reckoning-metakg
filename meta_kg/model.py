@@ -6,7 +6,7 @@ import torch.nn as nn
 
 from collections import Counter
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 from evaluate import load
 from dataclasses import dataclass
 from sklearn.metrics import accuracy_score
@@ -18,14 +18,10 @@ from transformers import (
     AutoTokenizer,
     T5ForConditionalGeneration,
     GPT2LMHeadModel,
-    GPTJForCausalLM,
-    GPTNeoForCausalLM,
     AutoModelForCausalLM,
-    GPT2ForSequenceClassification
 )
 
 from meta_kg.utils.py_io import write_json
-from meta_kg.dataset import ID_TO_LABEL
 from meta_kg.dataset import dataset_config
 
 model_class_registry = {
@@ -112,7 +108,10 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
             return_full_text=False,
             max_new_tokens=32,
         )
-        num_labels = dataset_config[global_config.dataset]
+
+        num_labels = dataset_config[global_config.dataset]["num_labels"]
+        self.labels = dataset_config[global_config.dataset]["labels"]
+        self.id_to_label = dataset_config[global_config.dataset]["id_to_label"]
         self.score = nn.Linear(model_config.n_embd, num_labels, bias=False)
 
     @classmethod
@@ -121,11 +120,6 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
 
         :param config: the global configuration
         """
-        # if config.classifier:
-        #     num_labels = dataset_config[config.dataset]
-        #     model = GPT2ForSequenceClassification.from_pretrained(
-        #         config.model_name_or_path, num_labels=num_labels)
-        # else:
         model_class = model_class_registry[config.model_type]
         model = model_class.from_pretrained(config.model_name_or_path)
 
@@ -209,7 +203,7 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
         if "evaluate" in features and features["evaluate"]:
             if self.global_config.classifier:
                 pred = main_out["logits"].argmax(axis=1).cpu().numpy().tolist()
-                main_out["print_out"]["gen_out"] = [ID_TO_LABEL[p] for p in pred]
+                main_out["print_out"]["gen_out"] = [self.id_to_label[p] for p in pred]
             else:
                 if "question" in print_out:
                     main_out["print_out"]["gen_out"] = [
@@ -228,7 +222,7 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
         :rtype: tuple
         """
         metrics = {}
-        sout = TranslationOutput.from_output(self.global_config, raw_output)
+        sout = TranslationOutput.from_output(self.global_config, raw_output, self.labels)
 
         scores = sout.gen_em()
         if isinstance(scores, dict):
@@ -275,9 +269,10 @@ class TranslationOutput:
     """Helper class for translation output"""
     config: Dict
     print_data: Dict
+    labels: List[str]
 
     @ classmethod
-    def from_output(cls, config, output):
+    def from_output(cls, config, output, labels=None):
         """Loads from raw outputs
 
         :param outputs: the outputs produced by the model
@@ -285,7 +280,7 @@ class TranslationOutput:
 
         print_data = cls.get_print_data(output, "print_out")
 
-        return cls(config=config, print_data=print_data)
+        return cls(config=config, print_data=print_data, labels=labels)
 
     @ classmethod
     def get_print_data(cls, output, print_key):
@@ -332,14 +327,11 @@ class TranslationOutput:
         """
         targets = self.targets
         outputs = self.outputs
-
         class_count = Counter(targets)
 
-        acc_class = {
-            "true": 0,
-            "false": 0,
-            "unknown": 0,
-        }
+        acc_class = {}
+        for c in self.labels:
+            acc_class[c] = 0
 
         if targets and outputs and len(targets) == len(outputs):
             for label, gen in zip(targets, outputs):
@@ -354,12 +346,12 @@ class TranslationOutput:
 
             acc = accuracy_score(targets, outputs)
 
-            return {
-                "acc": acc,
-                "acc_true": acc_class["true"],
-                "acc_false": acc_class["false"],
-                "acc_unknown": acc_class["unknown"],
-            }
+            metrics = {}
+            metrics["acc"] = acc
+            for c in acc_class:
+                metrics[f"acc_{c}"] = acc_class[c]
+
+            return metrics
 
     @ property
     def generative(self):
