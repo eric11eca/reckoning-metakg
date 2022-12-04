@@ -1,3 +1,5 @@
+import re
+import string
 import torch
 import wandb
 import itertools
@@ -16,7 +18,8 @@ from torch.nn import BCEWithLogitsLoss
 from transformers import (
     AutoConfig,
     AutoTokenizer,
-    T5ForConditionalGeneration,
+    T5Tokenizer,
+    AutoModelForSeq2SeqLM,
     GPT2LMHeadModel,
     AutoModelForCausalLM,
 )
@@ -25,13 +28,14 @@ from meta_kg.utils.py_io import write_json
 from meta_kg.dataset import dataset_config
 
 model_class_registry = {
-    "t5": T5ForConditionalGeneration,
+    "t5": AutoModelForSeq2SeqLM,
     "gpt2": GPT2LMHeadModel,
     "gptj": AutoModelForCausalLM,
     "gpt-neo": AutoModelForCausalLM,
 }
 
 exact_match_metric = load("exact_match")
+
 
 class GeneratorModel():
     """Convenient class for implementing a standard generator model"""
@@ -69,10 +73,6 @@ class GeneratorModel():
         elif do_sample and top_k:
             top_p = None
 
-        # note : doesn't require outputs
-        # this is good to avoid issues with relative attention
-        # https://github.com/huggingface/transformers/issues/10484
-
         outputs = self.model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -109,10 +109,21 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
             max_new_tokens=32,
         )
 
-        num_labels = dataset_config[global_config.dataset]["num_labels"]
-        self.labels = dataset_config[global_config.dataset]["labels"]
-        self.id_to_label = dataset_config[global_config.dataset]["id_to_label"]
-        self.score = nn.Linear(model_config.n_embd, num_labels, bias=False)
+        # num_labels = dataset_config[global_config.dataset_type]["num_labels"]
+        self.labels = dataset_config[global_config.dataset_type]["labels"]
+        self.id_to_label = dataset_config[global_config.dataset_type]["id_to_label"]
+        # if global_config.classifier:
+        #     self.score = nn.Linear(model_config.n_embd, num_labels, bias=False)
+        # self.lm_head_inner = nn.Linear(
+        #     model_config.n_embd,
+        #     model_config.vocab_size,
+        #     bias=False
+        # )
+        # self.lm_head_inner.load_state_dict(
+        #     self.model.lm_head.state_dict()
+        # )
+
+        # self.lm_head_inner.requires_grad = False
 
     @classmethod
     def from_config(cls, config):
@@ -127,27 +138,23 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
             config.model_name_or_path)
         model_config = AutoConfig.from_pretrained(config.model_name_or_path)
 
-        if "gpt" in config.model_type:
-            tokenizer.add_special_tokens({
-                'bos_token': '<|startoftext|>',
-                'eos_token': '<|endoftext|>',
-                'pad_token': '<pad>',
-                'additional_special_tokens': ['<gen>']
-            })
+        # if "gpt" in config.model_type:
+        # tokenizer.add_special_tokens({
+        #     'bos_token': '<|startoftext|>',
+        #     'eos_token': '<|endoftext|>',
+        # })
 
-            model.resize_token_embeddings(len(tokenizer))
-            model.config.pad_token_id = tokenizer.pad_token_id
-        
-        if config.classifier:
-            model.config.problem_type = "multi_label_classification"
+        # model.resize_token_embeddings(len(tokenizer))
+        model.config.pad_token_id = tokenizer.eos_token_id
 
-        for name, param in model.named_parameters():
-            if np.any([x in name for x in [
-                '.0.', '.1.', '.2.', '.3.',
-                '.4.', '.5.', '.6.', '.7.',
-            ]]):
-                print(f"Freezing {name}")
-                param.requires_grad = False
+        if config.freeze_partial:
+            for name, param in model.named_parameters():
+                if np.any([x in name for x in [
+                    '.0.', '.1.', '.2.', '.3.',
+                    '.4.', '.5.', '.6.', '.7.',
+                ]]):
+                    print(f"Freezing {name}")
+                    param.requires_grad = False
 
         return cls(
             model,
@@ -163,9 +170,8 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
         :param features: the target inputs
         :param print_out: data to print out during evaluation
         """
-        main_out = {"print_out": {}}
-        main_out["print_out"].update(print_out)
-        labels = features["input_ids"]
+        main_out = {"print_out": print_out}
+        labels = features["input_ids"] if "gpt" in self.global_config.model_type else features["labels"]
 
         outputs = self.model(
             input_ids=features["input_ids"],
@@ -175,35 +181,55 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
             return_dict=True
         )
 
-        if self.global_config.classifier and not is_inner:
-            input_ids = features["input_ids"]
-            logits = self.score(outputs["hidden_states"][-1])
-            batch_size, _ = input_ids.shape[:2]
-            sequence_lengths = torch.ne(input_ids, self.model.config.pad_token_id).sum(-1) - 1
-            pooled_logits = logits[torch.arange(batch_size, device=logits.device), sequence_lengths]
-            loss_fct = BCEWithLogitsLoss()
-            loss = loss_fct(pooled_logits, features["labels"])
-            main_out["loss"] = loss
-            main_out["logits"] = pooled_logits
-        else:
-            logits = outputs["logits"][..., :-1, :].contiguous()
-            labels = features["input_ids"][..., 1:].contiguous()
-            label_mask = features["token_type_ids"][..., 1:].contiguous()
+        # if self.global_config.classifier and not is_inner:
+        #     input_ids = features["input_ids"]
+        #     logits = self.score(outputs["hidden_states"][-1])
+        #     batch_size, _ = input_ids.shape[:2]
+        #     sequence_lengths = torch.ne(
+        #         input_ids, self.model.config.pad_token_id).sum(-1) - 1
+        #     pooled_logits = logits[torch.arange(
+        #         batch_size, device=logits.device), sequence_lengths]
+        #     loss_fct = BCEWithLogitsLoss()
+        #     loss = loss_fct(pooled_logits, features["labels"])
+        #     main_out["loss"] = loss
+        #     main_out["logits"] = pooled_logits
+        # elif self.global_config.model_type == "t5":
+        #     main_out["loss"] = outputs.loss
 
-            loss_fct = nn.CrossEntropyLoss(reduction="none")
-            losses = loss_fct(
-                logits.view(-1, logits.size(-1)),
-                labels.view(-1)
-            )
+        # if is_inner:
+        #     hidden_states = outputs["hidden_states"][-1]
+        #     lm_logits = self.lm_head_inner(hidden_states)
+        # else:
+        lm_logits = outputs["logits"]
 
-            losses = losses.view(logits.size(0), logits.size(1)) * label_mask
-            loss = torch.sum(losses, axis=1) / torch.sum(label_mask, axis=1)
-            main_out["loss"] = loss.mean()
+        logits = lm_logits[..., :-1, :].contiguous()
+        labels = features["input_ids"][..., 1:].contiguous()
+        label_mask = features["token_type_ids"][..., 1:].contiguous()
+
+        loss_fct = nn.CrossEntropyLoss(reduction="none")
+        losses = loss_fct(
+            logits.view(-1, logits.size(-1)),
+            labels.view(-1)
+        )
+        losses = losses.view(logits.size(0), logits.size(1)) * label_mask
+        loss = torch.sum(losses, axis=1) / torch.sum(label_mask, axis=1)
+        main_out["loss"] = loss.mean()
+
+        if is_inner:
+            main_out["token_loss"] = []
+            for i in range(losses.size(0)):
+                main_out["token_loss"].append(
+                    self.compute_token_loss(losses[i], labels[i]*label_mask[i]))
+            norm_logits = torch.softmax(logits, dim=-1)
+            batch_topk_tokens = self.get_tok_tokens(
+                norm_logits, labels, label_mask)
+            main_out["print_out"]["topk_tokens"] = [batch_topk_tokens]
 
         if "evaluate" in features and features["evaluate"]:
             if self.global_config.classifier:
                 pred = main_out["logits"].argmax(axis=1).cpu().numpy().tolist()
-                main_out["print_out"]["gen_out"] = [self.id_to_label[p] for p in pred]
+                main_out["print_out"]["gen_out"] = [
+                    self.id_to_label[p] for p in pred]
             else:
                 if "question" in print_out:
                     main_out["print_out"]["gen_out"] = [
@@ -214,6 +240,45 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
 
         return main_out
 
+    def get_tok_tokens(self, norm_logits, input_ids, label_mask):
+        batch_topk_tokens = []
+        for i in range(norm_logits.size(0)):
+            input_ids_item = input_ids[i]
+            norm_logits_item = norm_logits[i] * label_mask[i].unsqueeze(-1)
+            prob_locs = torch.nonzero(norm_logits_item)[:, 0].unique()
+            topk_tokens = self.get_token_prob(
+                prob_locs, norm_logits_item, input_ids_item)
+            batch_topk_tokens.append(topk_tokens)
+        return batch_topk_tokens
+
+    def get_token_prob(self, prob_locs, norm_logits, input_ids, k=10):
+        topk_tokens_seq = []
+        for loc in prob_locs:
+            token = self.tokenizer.decode(input_ids[loc])
+            topk_prob = torch.topk(norm_logits[loc], k=k)
+            topk_tokens = []
+            for idx in topk_prob.indices:
+                gen_token = self.tokenizer.decode(idx.unsqueeze(0))
+                prob = round(norm_logits[loc][idx].item() * 100, 3)
+                topk_tokens.append((token.strip(), gen_token.strip(), prob))
+            topk_tokens_seq.append(topk_tokens)
+        return topk_tokens_seq
+
+    def compute_token_loss(self, loss, input_ids):
+        """Computes the token-level loss for the given loss
+        :param loss: the sentence-level LM loss
+        :param input_ids: the input ids
+        :return: the token-level LM loss
+        """
+        matched_loss = list(zip(loss.cpu().detach(), input_ids))
+        token_loss = {}
+        for i, (loss, token_id) in enumerate(matched_loss):
+            if token_id > 0:
+                token = self.tokenizer.decode(token_id).strip()
+                token_loss[f"{i}: {token}"] = loss.item()
+
+        return token_loss
+
     def output_parser_metrics(self, raw_output):
         """Function responsible for parsing the raw_output and computing particular
         metrics from the model runner output.
@@ -222,13 +287,12 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
         :rtype: tuple
         """
         metrics = {}
-        sout = TranslationOutput.from_output(self.global_config, raw_output, self.labels)
-
-        scores = sout.gen_em()
-        if isinstance(scores, dict):
-            metrics.update(scores)
-        else:
-            metrics["acc"] = scores
+        sout = TranslationOutput.from_output(
+            self.global_config, raw_output, self.labels)
+        scores = sout.compute_metrics()
+        class_scores = sout.fine_grained_metrics()
+        metrics.update(scores)
+        metrics.update(class_scores)
         return (sout, metrics)
 
     def evaluate_output(self, output, out_file=None, metric_file=None, is_test=False):
@@ -320,38 +384,93 @@ class TranslationOutput:
     def outputs(self):
         return self.print_data.get("gen_out", [])
 
-    def gen_em(self):
+    def fine_grained_metrics(self):
+        """Computes the fine grained metrics for the output"""
+        targets = self.targets
+        outputs = self.outputs
+        class_count = Counter(targets)
+
+        class_metrics = {}
+        for c in self.labels:
+            if c not in class_count:
+                continue
+            class_metrics[c] = {}
+            class_metrics[c]['acc'] = 0
+            class_metrics[c]['f1'] = 0
+
+        metrics = {}
+        if targets and outputs and len(targets) == len(outputs):
+            for label, gen in zip(targets, outputs):
+                em = self.compute_exact_match(gen, label)
+                f1 = self.compute_f1(gen, label)
+                if label in class_metrics:
+                    class_metrics[label]['acc'] += em
+                    class_metrics[label]['f1'] += f1
+
+            for label in class_metrics:
+                for metric in class_metrics[label]:
+                    total_score = class_metrics[label][metric]
+                    metrics[f"{metric}_{label}"] = total_score / \
+                        class_count[label]
+
+        return metrics
+
+    def compute_metrics(self):
         """Returns an exact match accuracy for generation
 
         :rtype: float or None
         """
         targets = self.targets
         outputs = self.outputs
-        class_count = Counter(targets)
 
-        acc_class = {}
-        for c in self.labels:
-            acc_class[c] = 0
-
+        metrics = {}
         if targets and outputs and len(targets) == len(outputs):
-            for label, gen in zip(targets, outputs):
-                if gen.strip() == label:
-                    acc_class[label] += 1
+            em_scores = [self.compute_exact_match(
+                gen, label) for label, gen in zip(targets, outputs)]
+            f1_scores = [self.compute_f1(gen, label)
+                         for label, gen in zip(targets, outputs)]
 
-            for key in acc_class:
-                if class_count[key] > 0:
-                    acc_class[key] /= class_count[key]
-                else:
-                    acc_class[key] = 0
+            metrics["acc"] = sum(em_scores) / len(targets)
+            metrics["f1"] = sum(f1_scores) / len(targets)
 
-            acc = accuracy_score(targets, outputs)
+        return metrics
 
-            metrics = {}
-            metrics["acc"] = acc
-            for c in acc_class:
-                metrics[f"acc_{c}"] = acc_class[c]
+    def normalize_text(self, text):
+        """Removing articles and punctuation, and standardizing whitespace are all typical text processing steps."""
+        def remove_articles(text):
+            regex = re.compile(r"\b(a|an|the)\b", re.UNICODE)
+            return re.sub(regex, " ", text)
 
-            return metrics
+        def white_space_fix(text):
+            return " ".join(text.split())
+
+        def remove_punc(text):
+            exclude = set(string.punctuation)
+            return "".join(ch for ch in text if ch not in exclude)
+
+        def lower(text):
+            return text.lower()
+
+        return white_space_fix(remove_articles(remove_punc(lower(text))))
+
+    def compute_exact_match(self, prediction, truth):
+        return int(self.normalize_text(prediction) == self.normalize_text(truth))
+
+    def compute_f1(self, prediction, truth):
+        pred_tokens = self.normalize_text(prediction).split()
+        truth_tokens = self.normalize_text(truth).split()
+
+        if len(pred_tokens) == 0 or len(truth_tokens) == 0:
+            return int(pred_tokens == truth_tokens)
+
+        common_tokens = set(pred_tokens) & set(truth_tokens)
+        if len(common_tokens) == 0:
+            return 0
+
+        prec = len(common_tokens) / len(pred_tokens)
+        rec = len(common_tokens) / len(truth_tokens)
+
+        return 2 * (prec * rec) / (prec + rec)
 
     @ property
     def generative(self):
@@ -363,21 +482,20 @@ class TranslationOutput:
         """
         guids = self.print_data["guid"]
         prefixes = self.prefixes
+
         text_in = self.print_data["question"]
         targets = self.targets
         outputs = self.outputs
-        if "inner_loss" in self.print_data:
-            inner_loss = self.print_data["inner_loss"]
-        else:
-            inner_loss = None
 
-        if "inner_print_out" in self.print_data:
-            inner_out = self.print_data["inner_print_out"]
-        else:
-            inner_out = None
+        inner_loss_prev = self.print_data.get("inner_loss_prev")
+        inner_loss = self.print_data.get("inner_loss")
+        inner_loss_token_prev = self.print_data.get("inner_loss_token_prev")
+        inner_loss_token = self.print_data.get("inner_loss_token")
+        inner_loss_diff = self.print_data.get("inner_loss_diff")
+        inner_out = self.print_data.get("inner_print_out")
+        topk_tokens = self.print_data.get("topk_tokens")
 
         total_outputs = []
-
         for k, identifier in enumerate(guids):
             instance_dict = {}
             instance_dict["guid"] = identifier
@@ -386,13 +504,20 @@ class TranslationOutput:
             instance_dict["gen_out"] = outputs[k]
             instance_dict["answer"] = targets[k]
 
+            if inner_loss_prev:
+                instance_dict["inner_loss_prev"] = inner_loss_prev[k]
             if inner_loss:
                 instance_dict["inner_loss"] = inner_loss[k]
+            if inner_loss_token_prev:
+                instance_dict["inner_loss_token_prev"] = inner_loss_token_prev[k]
+            if inner_loss_diff:
+                instance_dict["inner_loss_diff"] = inner_loss_diff[k]
+            if inner_loss_token:
+                instance_dict["inner_loss_token"] = inner_loss_token[k]
             if inner_out:
                 instance_dict["inner_out"] = inner_out[k]
-
-            # if label_scores:
-            #     instance_dict["label_scores"] = label_scores[k]
+            if topk_tokens:
+                instance_dict["topk_tokens"] = topk_tokens[k]
 
             total_outputs.append(instance_dict)
 
