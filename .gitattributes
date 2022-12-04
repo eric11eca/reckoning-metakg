@@ -1,0 +1,2 @@
+data/clutrr filter=lfs diff=lfs merge=lfs -text
+data/clutrr_simple/ filter=lfs diff=lfs merge=lfs -text
