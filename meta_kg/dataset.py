@@ -20,7 +20,25 @@ dataset_config = {
         "id_to_label": {0: "yes", 1: "no", 2: "maybe"},
         "num_labels": 3
     },
+    "clutrr": {
+        "labels": [],
+        "label_to_id": {},
+        "id_to_label": {},
+        "num_labels": 0
+    },
     "proofwriter_owa_natlang": {
+        "labels": ["true", "false", "unknown"],
+        "label_to_id": {"true": 0, "false": 1, "unknown": 2},
+        "id_to_label": {0: "true", 1: "false", 2: "unknown"},
+        "num_labels": 3
+    },
+    "proofwriter_owa_d0": {
+        "labels": ["true", "false", "unknown"],
+        "label_to_id": {"true": 0, "false": 1, "unknown": 2},
+        "id_to_label": {0: "true", 1: "false", 2: "unknown"},
+        "num_labels": 3
+    },
+    "proofwriter_owa_d5": {
         "labels": ["true", "false", "unknown"],
         "label_to_id": {"true": 0, "false": 1, "unknown": 2},
         "id_to_label": {0: "true", 1: "false", 2: "unknown"},
@@ -32,7 +50,41 @@ dataset_config = {
         "id_to_label": {0: "true", 1: "false"},
         "num_labels": 2
     },
+    "proofwriter_cwa_d0": {
+        "labels": ["true", "false"],
+        "label_to_id": {"true": 0, "false": 1},
+        "id_to_label": {0: "true", 1: "false"},
+        "num_labels": 2
+    },
+    "proofwriter_cwa_d5": {
+        "labels": ["true", "false"],
+        "label_to_id": {"true": 0, "false": 1},
+        "id_to_label": {0: "true", 1: "false"},
+        "num_labels": 2
+    },
 }
+
+person_entitiy = {
+    "1": "A",
+    "2": "B",
+    "3": "C",
+    "4": "D",
+    "5": "X",
+    "6": "Y",
+    "7": "Z",
+    "8": "M",
+    "9": "N",
+    "10": "P",
+    "11": "Q",
+    "12": "R",
+    "13": "S",
+    "14": "T",
+    "15": "U",
+    "16": "V",
+}
+
+all_entity = ["10", "11", "12", "13", "14", "15",
+              "16", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
 
 
 def kg_as_span_reconstruction(triples, rules):
@@ -50,9 +102,15 @@ def kg_as_span_reconstruction(triples, rules):
     return facts
 
 
-def kg_as_autoregressive(triples, rules, prefix="new fact: "):
-    facts = [(prefix, kg['text']) for kg in triples.values()]
-    facts.extend([(prefix, kg['text']) for kg in rules.values()])
+def kg_as_autoregressive(triples, rules, baseline=False):
+    if baseline:
+        facts = [kg['text'] for kg in triples.values()]
+        facts += [kg['text'] for kg in rules.values()]
+    else:
+        facts = [f"triple_{i}: {kg['text']}" for i,
+                 kg in enumerate(triples.values())]
+        facts.extend([f"rule_{i}: {kg['text']}" for i,
+                      kg in enumerate(rules.values())])
     return facts
 
 
@@ -73,27 +131,36 @@ class ProofWriterDataReader():
         rules = instance["rules"]
         guid = str(uuid.uuid4())
 
-        if dataset_config[args.dataset] == 3:
+        if dataset_config[args.dataset]["num_labels"] == 3:
             prefix = "Is it true, false, or unknown that"
-        elif dataset_config[args.dataset] == 2:
+        elif dataset_config[args.dataset]["num_labels"] == 2:
             prefix = "Is it true or false that"
+        else:
+            prefix = ""
 
-        qa_pairs = []
+        true_pairs = []
+        false_pairs = []
         unknown_paris = []
         for qa_item in questions.values():
             question = qa_item["question"].replace(".", "")
             question = f"{prefix} {question}?"
             answer = str(qa_item["answer"]).lower()
-            if answer != "unknown":
-                qa_pairs.append((question, answer))
+            if answer == "true":
+                true_pairs.append((question, answer))
+            elif answer == "false":
+                false_pairs.append((question, answer))
             else:
                 unknown_paris.append((question, answer))
 
-        if len(unknown_paris) > 0:
-            qa_pairs += random.choices(unknown_paris,
-                                       k=len(unknown_paris) // 2)
+        qa_pairs = []
+        qa_pairs.append(random.choice(true_pairs))
+        qa_pairs.append(random.choice(false_pairs))
 
-        # qa_pairs += unknown_paris
+        if len(unknown_paris) > 0:
+            qa_pairs += random.choices(
+                unknown_paris,
+                k=len(unknown_paris) // 2
+            )
 
         if args.input_format == "mlm":
             facts = kg_as_span_reconstruction(triples, rules)
@@ -102,12 +169,14 @@ class ProofWriterDataReader():
             for item in qa_pairs:
                 question = item[0].replace(f"{prefix} ", "")
                 question = question.replace("?", "")
-                facts.append(kg_as_autoregressive(
-                    triples, rules,
-                    prefix=f"To determine if {question}, a person needs to know"
-                ))
+                parsed_facts = kg_as_autoregressive(
+                    triples, rules, args.baseline)
 
-        # assert len(facts) == len(qa_pairs) * (len(triples) + len(rules))
+                if args.inner_mode == "closed":
+                    prefix = f"To determine if {question}, we need to know"
+                    facts.append([f"{prefix} {fact}" for fact in parsed_facts])
+                else:
+                    facts.append(parsed_facts)
 
         return [{"guid": guid, "qa_pairs": [qa_pairs[i]], "facts": facts[i]} for i in range(len(qa_pairs))]
 
@@ -128,7 +197,11 @@ class ProofWriterDataReader():
 
             total_qa_data += qa_data
 
+        for data in total_qa_data[:2]:
+            pprint(data)
+
         return total_qa_data
+
 
 class ClutrrDataReader():
     """Custom dataset loader for QA problems with associated knowledge facts."""
@@ -141,31 +214,40 @@ class ClutrrDataReader():
         :param args: the configuration arguments
         :rtype instance: situation_modeling.readers.input_example.InputBase
         """
-
         questions = instance["questions"]
+        proofs = instance["proofs"]
         story = instance["facts"]
-        guid = str(uuid.uuid4())
-        prefix = "Is it true that"
-        
+        guid = instance["guid"]
+
         qa_pairs = []
-        # unknown_paris = []
         for qa_item in questions:
-            question = qa_item[0].replace(".", "")
-            question = f"{prefix} {question}?"
-            answer = str(qa_item[1]).lower()
-            qa_pairs.append((question, answer))
-            # if answer != "unknown":
-            #     qa_pairs.append((question, answer))
-            # else:
-            #     unknown_paris.append((question, answer))
-    
+            question = qa_item[0].replace("person", "")
+            for ent in all_entity:
+                question = question.replace(ent, person_entitiy[ent])
+            output = f"{qa_item[1]} {qa_item[2]}"
+            answer = qa_item[2]
+            for ent in all_entity:
+                output = output.replace(ent, person_entitiy[ent])
+            qa_pairs.append((question, output, answer))
+
         facts = []
         for item in qa_pairs:
-            question = item[0].replace(f"{prefix} ", "")
+            question = item[0]
             question = question.replace("?", "")
-            facts.append([(
-                f"To determine if {question}, a person needs to know",
-                fact) for fact in story])
+            if args.inner_mode == "closed":
+                prefix = f"To determine {question}, we need to know"
+                facts.append(
+                    [f"{prefix} fact_{i}: {fact}" for i, fact in enumerate(story)])
+            elif args.baseline:
+                facts.append([fact for fact in story])
+            else:
+                fact_in = []
+                for i, fact_pair in enumerate(story):
+                    fact = f"{fact_pair[0]} {fact_pair[1]}"
+                    for ent in all_entity:
+                        fact = fact.replace(ent, person_entitiy[ent])
+                    fact_in.append(f"fact_{i}: {fact}")
+                facts.append(fact_in)
 
         return [{"guid": guid, "qa_pairs": [qa_pairs[i]], "facts": facts[i]} for i in range(len(qa_pairs))]
 
@@ -185,40 +267,11 @@ class ClutrrDataReader():
             qa_data = cls._read(instance, config)
 
             total_qa_data += qa_data
-        
-        for data in total_qa_data[:3]:
+
+        for data in total_qa_data[:2]:
             pprint(data)
 
         return total_qa_data
-
-
-def meta_qa_data_loader(
-    task_name: str,
-    data_path: str,
-    split: str,
-    evaluate=False
-):
-    """Code for loading data and creating dataset cache
-
-    :param data_path: the location of the data
-    :param split: the data split
-    :param config: the global configuration
-    :param evaluate: whether or not this is an evaluation split
-    :param tokenizer: the model tokenizer, for possibly checking truncation
-    """
-    reader  = {
-        "proofwriter_owa_natlang": ProofWriterDataReader,
-        "proofwriter_cwa_natlang": ProofWriterDataReader,
-        "clutrr1": ClutrrDataReader
-    }
-
-    target_data = os.path.join(data_path, split+".jsonl")
-    data_container = reader[task_name].jsonl_file_reader(
-        target_data,
-        evaluate=evaluate
-    )
-
-    return data_container
 
 
 class MetaKnowledgeDataset(object):
@@ -227,13 +280,18 @@ class MetaKnowledgeDataset(object):
         self.data_type = data_type
         self.task_name = args.dataset
         self.args = args
-        
+
         reader_classes = {
             "proofwriter_owa_natlang": ProofWriterDataReader,
             "proofwriter_cwa_natlang": ProofWriterDataReader,
-            "clutrr1": ClutrrDataReader
+            "proofwriter_owa_d0": ProofWriterDataReader,
+            "proofwriter_owa_d5": ProofWriterDataReader,
+            "proofwriter_cwa_d0": ProofWriterDataReader,
+            "proofwriter_cwa_d5": ProofWriterDataReader,
+            "clutrr1": ClutrrDataReader,
+            "clutrr": ClutrrDataReader
         }
-        self.reader = reader_classes[self.task_name]
+        self.reader = reader_classes[args.dataset_type]
         self.is_training = is_training
         self.logger = logger
         self.tokenizer = tokenizer
@@ -264,16 +322,15 @@ class MetaKnowledgeDataset(object):
             self.tokenizer,
             self.is_training
         )
-
         self.dataloader = meta_dataloader.dataloader
-
         return self.dataloader
 
 
 class MetaDataLoader():
     def __init__(self, args, dataset, tokenizer, is_training):
         self.args = args
-        self.task = args.dataset
+        self.task = args.dataset_type
+
         self.dataset = dataset
         self.tokenizer = tokenizer
         self.evaluate = not is_training
@@ -288,12 +345,15 @@ class MetaDataLoader():
             batch_size = args.predict_batch_size
 
         if args.input_format == "t2t":
-            collate_fn = self.text2text_collator
-        else:
-            collate_fn = self.causal_lm_collator
-
-        if args.baseline:
-            collate_fn = self.causal_lm_base_collator
+            if args.baseline:
+                collate_fn = self.text2text_base_collator
+            else:
+                collate_fn = self.text2text_collator
+        elif args.input_format == "lm":
+            if args.baseline:
+                collate_fn = self.causal_lm_base_collator
+            else:
+                collate_fn = self.causal_lm_collator
 
         self.dataloader = DataLoader(
             dataset,
@@ -303,7 +363,7 @@ class MetaDataLoader():
             num_workers=args.num_workers
         )
 
-    def _tensorize(self, input_txt, output_txt, max_length):
+    def _tensorize(self, input_txt, output_txt, max_length=None):
         """Converts a list of strings into a tensor of ids
 
         :param input_txt: the input text
@@ -311,12 +371,14 @@ class MetaDataLoader():
         :param max_length: the maximum length of the sequence
         :return: the tensorized input and output
         """
-        pad = self.tokenizer.pad_token
+        pad = self.tokenizer.eos_token
         pad_id = self.tokenizer.encode(pad)
 
         ids1 = self.tokenizer(input_txt, return_tensors="pt")["input_ids"]
         ids2 = self.tokenizer(output_txt, return_tensors="pt")["input_ids"]
 
+        max_length = ids1.size(
+            1) + ids2.size(1) if max_length is None else max_length
         n_mask = max_length - ids1.size(1) - ids2.size(1)
         assert n_mask >= 0, (max_length, ids1.size(1), ids2.size(1))
         padding = torch.LongTensor(pad_id * n_mask).unsqueeze(0)
@@ -341,36 +403,48 @@ class MetaDataLoader():
         eos = self.tokenizer.eos_token
         bos = self.tokenizer.bos_token
 
-        facts_batch = [[fact[1] for fact in data['facts']] for data in batch]
+        facts_batch = ["\n".join([fact for fact in data['facts']])
+                       for data in batch]
         questions = [f"{data['qa_pairs'][0][0]}" for data in batch]
         answers = [data['qa_pairs'][0][1] for data in batch]
 
-        max_length = 600
+        max_length = 0
+        inputs = []
+        for facts, question, answer in zip(facts_batch, questions, answers):
+            fact_prefix = f"{bos}{facts}"
+            input_txt = f"{fact_prefix}\n{question}"
+            if self.args.no_facts:
+                input_txt = question
+            output_txt = f"{answer}{eos}"
+            inputs.append((input_txt, output_txt))
+
+            ids1 = self.tokenizer(
+                input_txt,
+                return_tensors="pt")["input_ids"]
+            ids2 = self.tokenizer(
+                output_txt,
+                return_tensors="pt")["input_ids"]
+            max_length = max(max_length, ids1.size(1) + ids2.size(1))
 
         input_ids_batch, attention_mask_batch, token_type_ids_batch = [], [], []
-        for facts, question, answer in zip(facts_batch, questions, answers):
-            fact_prefix = f"{bos}"
-            for fact in facts:
-                fact_prefix += f"{fact} "
-
-            input_txt = f"{fact_prefix}\n{question}"
-            output_txt = f"{answer}{eos}"
-
+        for (txt_in, txt_out) in inputs:
             input_ids, attention_mask, token_type_ids = self._tensorize(
-                input_txt, output_txt, max_length)
+                txt_in, txt_out, max_length)
 
             input_ids_batch.append(input_ids)
             attention_mask_batch.append(attention_mask)
             token_type_ids_batch.append(token_type_ids)
 
-        labels = torch.LongTensor([self.label_to_id[x] for x in answers])
-        labels = torch.nn.functional.one_hot(
-            labels, 
-            num_classes=self.num_classes
-        ).to(torch.float)
-        
+        if self.args.classifier:
+            labels = torch.LongTensor([self.label_to_id[x] for x in answers])
+            labels = torch.nn.functional.one_hot(
+                labels,
+                num_classes=self.num_classes
+            ).to(torch.float)
+        else:
+            labels = torch.cat(input_ids_batch, dim=0)
 
-        print_inputs = [data['qa_pairs'][0][0] for data in batch]
+        print_inputs = [f"{txt_in}" for (txt_in, _) in inputs]
         print_outputs = [data['qa_pairs'][0][1] for data in batch]
         print_out = {
             "guid": [data['guid'] for data in batch],
@@ -398,75 +472,156 @@ class MetaDataLoader():
         """
         eos = self.tokenizer.eos_token
         bos = self.tokenizer.bos_token
-        qa_data = batch[0]
-        max_length = 48
+        batch_features = []
+        for qa_data in batch:
+            max_length = 0
 
-        train_input_ids_batch = []
-        train_attention_mask_batch = []
-        train_token_type_ids_batch = []
+            train_input_ids_batch = []
+            train_attention_mask_batch = []
+            train_token_type_ids_batch = []
 
-        for i, fact in enumerate(qa_data["facts"]):
-            # train_input_txt = f"{bos}{fact[0]} fact_{i}: {fact[1]}"
-            train_input_txt = f"{bos}fact_{i} is {fact[1]}"
-            train_output_txt = f"{fact[1]}{eos}"
-            input_ids, attention_mask, token_type_ids = self._tensorize(
-                train_input_txt, train_output_txt, max_length)
-            train_input_ids_batch.append(input_ids)
-            train_attention_mask_batch.append(attention_mask)
-            train_token_type_ids_batch.append(token_type_ids)
+            train_samples = []
+            for i, fact in enumerate(qa_data['facts']):
+                fact_pair = fact.split(':')
+                train_input_txt = f"{fact_pair[0].strip()}: "
+                train_output_txt = f"{fact_pair[1].strip()}"
+                ids1 = self.tokenizer(
+                    train_input_txt, return_tensors="pt")["input_ids"]
+                ids2 = self.tokenizer(
+                    train_output_txt, return_tensors="pt")["input_ids"]
+                max_length = max(max_length, ids1.size(1) + ids2.size(1))
+                train_samples.append((train_input_txt, train_output_txt))
 
-        dev_input_ids_batch = []
-        dev_attention_mask_batch = []
-        dev_token_type_ids_batch = []
-        labels_batch = []
+            for sample in train_samples:
+                train_input_txt = sample[0]
+                train_output_txt = sample[1]
+                input_ids, attention_mask, token_type_ids = self._tensorize(
+                    train_input_txt, train_output_txt, max_length)
+                train_input_ids_batch.append(input_ids)
+                train_attention_mask_batch.append(attention_mask)
+                train_token_type_ids_batch.append(token_type_ids)
 
-        for qa_pair in qa_data["qa_pairs"]:
-            dev_input_txt = f"{bos}{qa_pair[0]}"
-            dev_output_txt = f"{qa_pair[1]}{eos}"
-            input_ids, attention_mask, token_type_ids = self._tensorize(
-                dev_input_txt, dev_output_txt, max_length)
-            dev_input_ids_batch.append(input_ids)
-            dev_attention_mask_batch.append(attention_mask)
-            dev_token_type_ids_batch.append(token_type_ids)
-            labels = torch.nn.functional.one_hot(
-                torch.tensor([self.label_to_id[str(qa_pair[1])]]), 
-                num_classes=self.num_classes
-            ).to(torch.float)
-            labels_batch.append(labels)
+            dev_input_ids_batch = []
+            dev_attention_mask_batch = []
+            dev_token_type_ids_batch = []
+            labels_batch = []
 
-        feature = {
-            "input_ids": torch.cat(dev_input_ids_batch, dim=0),
-            "attention_mask": torch.cat(dev_attention_mask_batch, dim=0),
-            "token_type_ids": torch.cat(dev_token_type_ids_batch, dim=0),
-            "labels": torch.cat(labels_batch, dim=0),
-            "train_input_ids": torch.cat(train_input_ids_batch, dim=0),
-            "train_attention_mask": torch.cat(train_attention_mask_batch, dim=0),
-            "train_token_type_ids": torch.cat(train_token_type_ids_batch, dim=0),
-            "print_out": {"guid": [qa_data["guid"]]},
-            "evaluate": self.evaluate
+            for qa_pair in qa_data["qa_pairs"]:
+                dev_input_txt = f"{qa_pair[0]}"
+                dev_output_txt = f"{qa_pair[2]}{eos}"
+                input_ids, attention_mask, token_type_ids = self._tensorize(
+                    dev_input_txt, dev_output_txt)
+                # if self.args.classifier:
+                #     encoded = self.tokenizer(
+                #         dev_input_txt, return_tensors="pt", return_token_type_ids=True)
+                #     input_ids = encoded["input_ids"]
+                #     attention_mask = encoded["attention_mask"]
+                #     token_type_ids = encoded["token_type_ids"]
+                dev_input_ids_batch.append(input_ids)
+                dev_attention_mask_batch.append(attention_mask)
+                dev_token_type_ids_batch.append(token_type_ids)
+
+                if self.args.classifier:
+                    labels = torch.nn.functional.one_hot(
+                        torch.tensor([self.label_to_id[str(qa_pair[1])]]),
+                        num_classes=self.num_classes
+                    ).to(torch.float)
+                    labels_batch.append(labels)
+                else:
+                    labels_batch.append(input_ids)
+
+            feature = {
+                "input_ids": torch.cat(dev_input_ids_batch, dim=0),
+                "attention_mask": torch.cat(dev_attention_mask_batch, dim=0),
+                "token_type_ids": torch.cat(dev_token_type_ids_batch, dim=0),
+                "labels": torch.cat(labels_batch, dim=0),
+                "train_input_ids": torch.cat(train_input_ids_batch, dim=0),
+                "train_attention_mask": torch.cat(train_attention_mask_batch, dim=0),
+                "train_token_type_ids": torch.cat(train_token_type_ids_batch, dim=0),
+                "print_out": {"guid": [qa_data["guid"]]},
+                "evaluate": self.evaluate
+            }
+
+            # feature["input_ids"] = feature["train_input_ids"]
+            # feature["attention_mask"] = feature["train_attention_mask"]
+            # feature["token_type_ids"] = feature["train_token_type_ids"]
+
+            if self.evaluate:
+                train_inputs = [
+                    fact[0] for fact in train_samples]
+                train_outputs = [
+                    fact[1] for fact in train_samples]
+                dev_inputs_eval = [
+                    f"{bos}{qa_pair[0]}" for qa_pair in qa_data["qa_pairs"]]
+                dev_outputs = [str(qa_pair[1])
+                               for qa_pair in qa_data["qa_pairs"]]
+
+                feature["print_out"].update({
+                    "question": dev_inputs_eval,
+                    "answer": dev_outputs,
+                    "prefix": [self.args.dataset],
+                })
+
+                feature["inner_print_out"] = {
+                    "prompt": train_inputs,
+                    "fact": train_outputs,
+                    "guid": [qa_data["guid"]]
+                }
+
+                # feature["print_out"]["question"] = feature["inner_print_out"]["prompt"]
+                # feature["print_out"]["answer"] = feature["inner_print_out"]["fact"]
+            batch_features.append(feature)
+        return batch_features
+
+    def text2text_base_collator(self, batch):
+        """Batch collator for this custom class
+        :param batch: an incoming batch
+        :param tokenizer: the model tokenizer
+        :param args: the global configuration
+        """
+        facts_batch = ["\n".join([fact[1]
+                                 for fact in data['facts']]) for data in batch]
+        questions = [f"{data['qa_pairs'][0][0]}" for data in batch]
+        answers = [data['qa_pairs'][0][1] for data in batch]
+        inputs = [f"{facts}\n{question}" for facts,
+                  question in zip(facts_batch, questions)]
+
+        max_length = 0
+        for input in inputs:
+            max_length = max(max_length, len(self.tokenizer(input)))
+
+        tokenized_input = self.tokenizer.batch_encode_plus(
+            inputs,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+            max_length=max_length
+        )
+
+        tokenized_output = self.tokenizer.batch_encode_plus(
+            answers,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+            max_length=4
+        )
+
+        print_inputs = inputs
+        print_outputs = [data['qa_pairs'][0][1] for data in batch]
+        print_out = {
+            "guid": [data['guid'] for data in batch],
+            "prefix": [self.args.dataset for data in batch],
+            "question": print_inputs,
+            "answer": print_outputs,
         }
 
-        if self.evaluate:
-            train_inputs = [
-                fact[0] for fact in qa_data["facts"]]
-            train_outputs = [
-                fact[1] for fact in qa_data["facts"]]
-            dev_inputs_eval = [
-                f"{bos}{qa_pair[0]}" for qa_pair in qa_data["qa_pairs"]]
-            dev_outputs = [str(qa_pair[1])
-                           for qa_pair in qa_data["qa_pairs"]]
-
-            feature["print_out"].update({
-                "question": dev_inputs_eval,
-                "answer": dev_outputs,
-                "prefix": [self.args.dataset],
-            })
-
-            feature["inner_print_out"] = {
-                "prompt": train_inputs,
-                "fact": train_outputs,
-                "guid": [qa_data["guid"]]
-            }
+        feature = {
+            "input_ids": tokenized_input["input_ids"],
+            "attention_mask": tokenized_input["attention_mask"],
+            "labels": tokenized_output["input_ids"],
+            "print_out": print_out,
+            "evaluate": self.evaluate
+        }
 
         return feature
 
