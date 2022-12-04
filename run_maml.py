@@ -12,6 +12,7 @@ from transformers import get_linear_schedule_with_warmup
 from meta_kg.dataset import MetaKnowledgeDataset
 from meta_kg.model import PretrainedEncoderDecoder
 from meta_kg.train import setup_trainer
+from meta_kg.optimizer import LSLRSchedular
 from meta_kg.utils.py_io import write_json
 from meta_kg.utils.wandb_utils import setup_wandb
 
@@ -21,7 +22,6 @@ util_logger = logging.getLogger(
 
 
 class MetaKnowledgeRunner(pl.LightningModule):
-
     def __init__(self, config):
         """Creates model runner instance
 
@@ -42,6 +42,12 @@ class MetaKnowledgeRunner(pl.LightningModule):
 
         self.model = PretrainedEncoderDecoder.from_config(config)
         self.tokenizer = self.model.tokenizer
+        self.inner_schedular = LSLRSchedular(
+            num_inner_iter=config.n_inner_iter,
+            init_lr=config.inner_lr
+        )
+        self.inner_schedular.initialization(
+            self.model.named_parameters())
 
         self.load_dataset()
         self.model_logger.info(
@@ -52,12 +58,16 @@ class MetaKnowledgeRunner(pl.LightningModule):
             "task": config.dataset,
             "model": config.model_name_or_path,
             "model_type": config.model_type,
-            "baseline": config.baseline,
+            "input_format": config.input_format,
             "inner_lr": config.inner_lr,
             "n_inner_iter": config.n_inner_iter,
             "learning_rate": config.learning_rate,
+            "baseline": config.baseline,
             "classifier": config.classifier,
+            "no_facts": config.no_facts,
+            "random_facts": config.random_facts,
             "wandb_name": config.wandb_name,
+            "gpu_id": config.device_idx,
         }
 
         write_json(metadata, f"{config.run_dir}/metadata.json")
@@ -78,10 +88,12 @@ class MetaKnowledgeRunner(pl.LightningModule):
                 torch.device(self.hparams.device)),
             "attention_mask": batch["attention_mask"].to(
                 torch.device(self.hparams.device)),
-            "token_type_ids": batch["token_type_ids"].to(
-                torch.device(self.hparams.device)),
             "evaluate": not is_train
         }
+
+        if "token_type_ids" in batch:
+            features["token_type_ids"] = batch["token_type_ids"].to(
+                torch.device(self.hparams.device))
 
         if "labels" in batch:
             features["labels"] = batch["labels"].to(
@@ -107,19 +119,51 @@ class MetaKnowledgeRunner(pl.LightningModule):
 
         return output_dict
 
-    def step(self, batch, is_train: bool) -> Dict:
-        """Runs a single meta-training step
+    def inner_loop_step(self, features, print_out, fmodel, diffopt) -> Dict:
+        """Runs a single inner loop step
 
-        :param batch: the target batch
+        :param features: the target batch
+        :param print_out: None in this step
+        :param fmodel: the fast model
+        :param diffopt: the optimizer
+        :rtype: dict
+        :returns: dictionary that includes loss
+        """
+        for iter in range(self.hparams.n_inner_iter):
+            train_out = fmodel(features, print_out, is_inner=True)
+            train_loss = train_out["loss"]
+            if not train_loss.requires_grad:
+                train_loss.requires_grad = True
+            self.inner_schedular.step(
+                diffopt, self.model.named_parameters(), iter)
+            diffopt.step(train_loss)
+
+    def inner_loop_end(self, features, print_out, fmodel, is_train: bool) -> Dict:
+        """Runs a single inner loop step
+
+        :param features: the target batch
+        :param print_out: None in this step
+        :param fmodel: the fast model
         :param is_train: whether to run training or validation
         :rtype: dict
         :returns: dictionary that includes loss
         """
-        inner_opt = torch.optim.SGD(
-            self.model.parameters(),
-            lr=self.hparams.inner_lr
-        )
+        with torch.no_grad():
+            # TODO evaluation during inner-loop optimization
+            # train_features["evaluate"] = not is_train
 
+            train_pred = fmodel(
+                features, print_out, is_inner=True)
+            inner_train_loss = train_pred["loss"]
+            inner_train_loss_token = train_pred["token_loss"]
+
+        return {
+            'inner_train_loss': inner_train_loss.cpu(),
+            'inner_train_loss_token': inner_train_loss_token
+        }
+
+    def get_features(self, batch, is_train: bool):
+        """Get features from batch"""
         print_out = batch["print_out"]
         train_features = {
             "input_ids": batch["train_input_ids"].to(
@@ -135,80 +179,105 @@ class MetaKnowledgeRunner(pl.LightningModule):
             train_features["labels"] = batch["train_labels"].to(
                 torch.device(self.hparams.device))
 
-        with higher.innerloop_ctx(
-            self.model, inner_opt,
-            copy_initial_weights=False,
-            track_higher_grads=is_train
-        ) as (fmodel, diffopt):
-            for name, param in fmodel.named_parameters():
-                if np.any([x in name for x in [
-                    '.0.', '.1.', '.2.', '.3.',
-                    '.4.', '.5.', '.6.', '.7.',
-                ]]):
-                    param.requires_grad = False
-                else:
-                    param.requires_grad = True
-            for _ in range(self.hparams.n_inner_iter):
-                train_out = fmodel(train_features, print_out, is_inner=True)
-                train_loss = train_out["loss"]
-                if not train_loss.requires_grad:
-                    train_loss.requires_grad = True
-                diffopt.step(train_loss)
+        dev_features = {
+            "input_ids": batch["input_ids"].to(
+                torch.device(self.hparams.device)),
+            "attention_mask": batch["attention_mask"].to(
+                torch.device(self.hparams.device)),
+            "token_type_ids": batch["token_type_ids"].to(
+                torch.device(self.hparams.device)),
+            "evaluate": not is_train
+        }
 
-            with torch.no_grad():
-                for name, param in fmodel.named_parameters():
-                    param.requires_grad = False
+        if "labels" in batch and self.hparams.classifier:
+            dev_features["labels"] = batch["labels"].to(
+                torch.device(self.hparams.device))
+
+        return train_features, dev_features, print_out
+
+    def step(self, batch, is_train: bool) -> Dict:
+        """Runs a single meta-training step
+
+        :param batch: the target batch
+        :param is_train: whether to run training or validation
+        :rtype: dict
+        :returns: dictionary that includes loss
+        """
+        model_params = []
+        for idx, (name, param) in enumerate(self.model.named_parameters()):
+            if param.requires_grad:
+                model_params.append(
+                    {"params": param, "lr": self.hparams.inner_lr})
+
+        inner_opt = torch.optim.SGD(
+            model_params,
+            momentum=0.9,
+        )
+
+        loss = torch.tensor(0., device=self.device)
+        outer_loss = torch.tensor(0., device='cpu')
+        inner_loss = torch.tensor(0., device='cpu')
+        inner_loss_diff = torch.tensor(0., device='cpu')
+        print_outs = []
+
+        for _, task in enumerate(batch):
+            train_features, dev_features, print_out = self.get_features(
+                task, is_train)
+
+            with higher.innerloop_ctx(
+                self.model, inner_opt,
+                copy_initial_weights=False,
+                track_higher_grads=True
+            ) as (fmodel, diffopt):
+                inner_out_prev = self.inner_loop_end(
+                    train_features, print_out, fmodel, is_train)
+                self.inner_loop_step(
+                    train_features, print_out, fmodel, diffopt)
+                inner_out_post = self.inner_loop_end(
+                    train_features, print_out, fmodel, is_train)
+
+                diff = inner_out_post["inner_train_loss"] - \
+                    inner_out_prev["inner_train_loss"]
+                inner_loss += inner_out_post["inner_train_loss"]
+                inner_loss_diff += diff
+
+                token_loss = []
+                prev_token_loss = inner_out_prev["inner_train_loss_token"]
+                post_token_loss = inner_out_post["inner_train_loss_token"]
+                for (prev_loss, post_loss) in zip(prev_token_loss, post_token_loss):
+                    for token in post_loss:
+                        curr = post_loss[token]
+                        prev = prev_loss[token]
+                        diff = curr - prev
+                        post_loss[token] = (curr, diff)
+                    token_loss.append(post_loss)
+
                 if is_train:
-                    train_pred = fmodel(
-                        train_features, print_out, is_inner=True)
-                    inner_train_loss = train_pred["loss"].cpu()
-                else:
-                    # train_features["evaluate"] = True
-                    inner_print_out = batch["inner_print_out"]
-                    train_pred = fmodel(
-                        train_features, inner_print_out, is_inner=True)
-                    inner_train_loss = train_pred["loss"].cpu()
-
-            dev_features = {
-                "input_ids": batch["input_ids"].to(
-                    torch.device(self.hparams.device)),
-                "attention_mask": batch["attention_mask"].to(
-                    torch.device(self.hparams.device)),
-                "token_type_ids": batch["token_type_ids"].to(
-                    torch.device(self.hparams.device)),
-                "evaluate": not is_train
-            }
-
-            if "labels" in batch and self.hparams.classifier:
-                dev_features["labels"] = batch["labels"].to(
-                    torch.device(self.hparams.device))
-
-            if is_train:
-                dev_out = fmodel(dev_features, print_out)
-                outer_train_loss = dev_out["loss"]
-                output_dict = {
-                    'loss': outer_train_loss,
-                    'inner_loss': inner_train_loss,
-                    'outer_loss': outer_train_loss.cpu(),
-                }
-
-            else:
-                fmodel.eval()
-                with torch.no_grad():
-                    for name, param in fmodel.named_parameters():
-                        param.requires_grad = False
                     dev_out = fmodel(dev_features, print_out)
-                    dev_out["print_out"]["inner_loss"] = [
-                        inner_train_loss.item()]
-                    outer_train_loss = dev_out["loss"]
-                    output_dict = {
-                        'loss': outer_train_loss,
-                        'inner_loss': inner_train_loss,
-                        'outer_loss': outer_train_loss.cpu(),
-                        'print_out': dev_out["print_out"],
-                    }
+                    loss += dev_out["loss"]
+                    outer_loss += dev_out["loss"].cpu()
+                else:
+                    with torch.no_grad():
+                        dev_out = fmodel(dev_features, print_out)
+                        dev_out["print_out"]["inner_loss_diff"] = [diff]
+                        dev_out["print_out"]["inner_loss"] = [
+                            inner_out_post["inner_train_loss"].item()]
+                        dev_out["print_out"]["inner_loss_token"] = [token_loss]
+                        print_outs.append(dev_out["print_out"])
 
-                    # output_dict["inner_print_out"] = train_pred["print_out"]
+                        # TODO write evaluation output from inner-loop optimization
+                        # output_dict["inner_print_out"] = train_pred["print_out"]
+        output_dict = {
+            'loss': loss,
+            'inner_loss_diff': inner_loss_diff / len(batch),
+            'inner_loss': inner_loss / len(batch),
+            'outer_loss': outer_loss / len(batch),
+        }
+
+        if not is_train:
+            output_dict["print_out"] = print_outs
+
+        # TODO need to do manual backward pass with accumulated loss!
 
         return output_dict
 
@@ -231,7 +300,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
             )
         else:
             output_dict = self.step(batch, is_train=True)
-            for mkey in ["inner_loss", "outer_loss"]:
+            for mkey in ["inner_loss_diff", "inner_loss", "outer_loss"]:
                 self.log(
                     f'batch_{mkey}',
                     output_dict[mkey],
@@ -258,6 +327,8 @@ class MetaKnowledgeRunner(pl.LightningModule):
                 on_epoch=True
             )
         else:
+            avg_innser_loss_diff = torch.stack(
+                [x["inner_loss_diff"] for x in outputs]).mean()
             avg_inner_loss = torch.stack(
                 [x["inner_loss"] for x in outputs]).mean()
             avg_outer_loss = torch.stack(
@@ -266,6 +337,13 @@ class MetaKnowledgeRunner(pl.LightningModule):
             self.log(
                 "avg_inner_loss",
                 avg_inner_loss,
+                on_step=False,
+                on_epoch=True
+            )
+
+            self.log(
+                "avg_innser_loss_diff",
+                avg_innser_loss_diff,
                 on_step=False,
                 on_epoch=True
             )
@@ -295,8 +373,6 @@ class MetaKnowledgeRunner(pl.LightningModule):
             torch.set_grad_enabled(True)
             self.model.train()
             output_dict = self.step(batch, is_train=False)
-            assert len(output_dict["print_out"]["gen_out"]) == len(
-                output_dict["print_out"]["answer"])
         return output_dict
 
     def validation_epoch_end(self, outputs):
@@ -304,6 +380,19 @@ class MetaKnowledgeRunner(pl.LightningModule):
         :param outputs: the outputs of the train step
         :rtype: None 
         """
+        if len(outputs) == 0:
+            metrics = {
+                "acc": 0.5112795857988166,
+                "f1": 0.5112795857988166
+            }
+            for metric_name, metric_value in metrics.items():
+                self.log(
+                    f"val_{metric_name}",
+                    metric_value,
+                    on_epoch=True,
+                    prog_bar=True
+                )
+            return
         if self.baseline:
             val_loss = torch.stack([x["train_loss"] for x in outputs]).mean()
         else:
@@ -315,6 +404,11 @@ class MetaKnowledgeRunner(pl.LightningModule):
 
         out_file_name = f"dev_out-epoch={epoch}_step={step}.json"
         metirc_file_name = f"val_metrics-epoch={epoch}_step={step}.json"
+
+        print_out_flatten = []
+        for out in outputs:
+            print_out_flatten += out["print_out"]
+        outputs = [{"print_out": item} for item in print_out_flatten]
 
         metrics_out = self.model.evaluate_output(
             outputs,
@@ -337,6 +431,11 @@ class MetaKnowledgeRunner(pl.LightningModule):
     def test_epoch_end(self, outputs):
         test_loss = torch.stack([x["outer_loss"] for x in outputs]).mean()
         self.log("test_loss", test_loss, on_epoch=True, prog_bar=True)
+
+        print_out_flatten = []
+        for out in outputs:
+            print_out_flatten += out["print_out"]
+        outputs = [{"print_out": item} for item in print_out_flatten]
 
         out_file_name = f"test_eval_out.json"
         metirc_file_name = f"test_metrics.json"
@@ -377,6 +476,10 @@ class MetaKnowledgeRunner(pl.LightningModule):
                 "params": parameters_sec,
                 "weight_decay": 0.0
             },
+            {
+                "params": self.inner_schedular.parameters(),
+                "weight_decay": 0.0
+            }
         ]
 
         optimizer = AdamW(
@@ -441,14 +544,15 @@ class MetaKnowledgeRunner(pl.LightningModule):
             data_type="dev",
             is_training=False
         )
-        self.test_data = MetaKnowledgeDataset(
-            self.model_logger,
-            self.hparams,
-            self.tokenizer,
-            self.hparams.train_dir,
-            data_type="test",
-            is_training=False
-        )
+        self.test_data = self.dev_data
+        # self.test_data = MetaKnowledgeDataset(
+        #     self.model_logger,
+        #     self.hparams,
+        #     self.tokenizer,
+        #     self.hparams.train_dir,
+        #     data_type="test",
+        #     is_training=False
+        # )
         self.model_logger.info('Dataset loaded')
 
     def train_dataloader(self):
@@ -489,9 +593,6 @@ def run(args):
     util_logger.info('Setting up configuration for model runner...')
 
     setup_wandb(args)
-    wandb_runner = None
-
-    metrics = {}
     model = MetaKnowledgeRunner(args)
     trainer = setup_trainer(args)
 
@@ -500,17 +601,6 @@ def run(args):
             trainer.fit(model, ckpt_path=args.load_checkpoint)
         else:
             trainer.fit(model)
-
-        if args.wandb_project:
-            wandb_runner = trainer.logger.experiment
-
-        for key, value in trainer.callback_metrics.items():
-            if key in ["log", "progress_bar"] or "acc" not in key:
-                continue
-            try:
-                metrics[key] = value.detach().item()
-            except:
-                pass
 
     if args.do_eval:
         if args.load_checkpoint is not None:
