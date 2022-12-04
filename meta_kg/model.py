@@ -9,7 +9,6 @@ import torch.nn as nn
 from collections import Counter
 from pathlib import Path
 from typing import Dict, List
-from evaluate import load
 from dataclasses import dataclass
 from sklearn.metrics import accuracy_score
 from transformers import TextGenerationPipeline
@@ -33,8 +32,6 @@ model_class_registry = {
     "gptj": AutoModelForCausalLM,
     "gpt-neo": AutoModelForCausalLM,
 }
-
-exact_match_metric = load("exact_match")
 
 
 class GeneratorModel():

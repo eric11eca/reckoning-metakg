@@ -29,13 +29,17 @@ RUN apt-get update --fix-missing && apt-get install -y \
     libxext6 \
     libxrender1 \
     wget \
+    python3 \
+    python3-pip \
     libevent-dev \
     build-essential && \
     rm -rf /var/lib/apt/lists/* 
 
 # Install requirements
 COPY requirements.txt .
-RUN pip install -r requirements.txt --default-timeout=1000
+RUN pip3 install setuptools-rust
+RUN pip3 install --upgrade pip
+RUN pip3 install -r requirements.txt --default-timeout=1000
 RUN pip3 install torch --extra-index-url https://download.pytorch.org/whl/cu116 --default-timeout=1000 
 
 # Copy code

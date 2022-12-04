@@ -2,12 +2,10 @@ rich
 tqdm
 wandb
 jupyter
-torchtyping
-pytorch-lightning==1.7.6
+pytorch-lightning
 torchmetrics
 sentence_transformers
 transformers
 sklearn
 datasets
 higher
-evaluate
