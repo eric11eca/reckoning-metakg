@@ -25,8 +25,7 @@ def setup_trainer(args) -> pl.Trainer:
     :rtype: a trainer instance 
     """
     # args = argparse.Namespace(**config.__dict__)
-    mode = "max" if args.callback_monitor == "val_acc" else "min"
-
+    mode = "max"
     util_logger.info('mode=%s via %s' % (mode, args.callback_monitor))
 
     if not os.path.isdir(args.output_dir):
@@ -87,8 +86,6 @@ def setup_trainer(args) -> pl.Trainer:
     #     )
     #     callbacks.append(artifact_callback)
 
-    n_gpus = args.n_gpu if torch.cuda.is_available() else 0
-
     # train parameters
     train_params = dict(
         accelerator='gpu',
@@ -100,7 +97,7 @@ def setup_trainer(args) -> pl.Trainer:
         callbacks=callbacks,
         num_sanity_val_steps=4,
         log_every_n_steps=5,
-        val_check_interval=0.25,
+        val_check_interval=0.15,
         # auto_lr_find=args.auto_lr_find,
         # amp_level=args.opt_level,
         # amp_backend=args.amp_backend,

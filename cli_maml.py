@@ -20,7 +20,8 @@ def main():
     # Basic parameters
     parser.add_argument("--train_dir", default="data")
     parser.add_argument("--predict_dir", default="data")
-    parser.add_argument("--dataset", default="proofwriter_cwa_natlang")
+    parser.add_argument("--dataset", default="proofwriter_owa_natlang")
+    parser.add_argument("--dataset_type", default="clutrr")
     parser.add_argument("--model_name_or_path",
                         default="gpt2", required=False)
     parser.add_argument("--model_type",
@@ -34,13 +35,12 @@ def main():
     parser.add_argument("--baseline", action='store_true')
 
     # Meta Learn parameters
+    parser.add_argument('--inner_mode', type=str, default='open',
+                        help='open book or closed book: [open, closed]')
     parser.add_argument('--inner_lr', type=float, default=1e-5,
                         help='Inner loop learning rate for SGD')
     parser.add_argument("--n_inner_iter", default=1, type=int,
                         help="Total number of inner training epochs to perform.")
-
-    # Model parameters
-    parser.add_argument("--checkpoint", type=str)
 
     # Preprocessing/decoding-related parameters
     parser.add_argument("--max_seq_length", default=64, type=int)
@@ -76,6 +76,12 @@ def main():
                         default=None, help='path to checkpoint')
     parser.add_argument('--classifier', action='store_true', default=False,
                         help='whether to use the classifier mode')
+    parser.add_argument('--no_facts', action='store_true', default=False,
+                        help='whether to do sanity check with no facts')
+    parser.add_argument('--random_facts', action='store_true', default=False,
+                        help='whether to do sanity check with random facts')
+    parser.add_argument('--freeze_partial', action='store_true', default=False,
+                        help='whether to freeze partial layers of the model')
 
     # Other parameters
     parser.add_argument("--verbose", action='store_true',
@@ -95,7 +101,7 @@ def main():
     parser.add_argument('--wandb_entity', type=str, default='causal_scaffold')
     parser.add_argument('--wandb_project', type=str, default='meta_knowledge')
     parser.add_argument('--wandb_name', type=str,
-                        default='classifier_dqkg_cwa')
+                        default='test_classifier_dkg_owa')
     parser.add_argument('--wandb_data', type=str,
                         default='')
     parser.add_argument("--wandb_note",
@@ -148,10 +154,9 @@ def main():
             raise ValueError(
                 "If `do_train` is True, then `predict_dir` must be specified.")
 
-    if args.do_eval:
-        if not args.predict_dir:
-            raise ValueError(
-                "If `do_eval` is True, then `predict_dir` must be specified.")
+    if args.do_eval and not args.predict_dir:
+        raise ValueError(
+            "If `do_eval` is True, then `predict_dir` must be specified.")
 
     timestr = time.strftime("%Y%m%d-%H%M%S")
     run_dir = f"{args.output_dir}/{timestr}"
