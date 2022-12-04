@@ -64,28 +64,6 @@ dataset_config = {
     },
 }
 
-person_entitiy = {
-    "1": "A",
-    "2": "B",
-    "3": "C",
-    "4": "D",
-    "5": "X",
-    "6": "Y",
-    "7": "Z",
-    "8": "M",
-    "9": "N",
-    "10": "P",
-    "11": "Q",
-    "12": "R",
-    "13": "S",
-    "14": "T",
-    "15": "U",
-    "16": "V",
-}
-
-all_entity = ["10", "11", "12", "13", "14", "15",
-              "16", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
-
 
 def kg_as_span_reconstruction(triples, rules):
     facts = []
@@ -222,12 +200,8 @@ class ClutrrDataReader():
         qa_pairs = []
         for qa_item in questions:
             question = qa_item[0].replace("person", "")
-            for ent in all_entity:
-                question = question.replace(ent, person_entitiy[ent])
             output = f"{qa_item[1]} {qa_item[2]}"
             answer = qa_item[2]
-            for ent in all_entity:
-                output = output.replace(ent, person_entitiy[ent])
             qa_pairs.append((question, output, answer))
 
         facts = []
@@ -244,8 +218,6 @@ class ClutrrDataReader():
                 fact_in = []
                 for i, fact_pair in enumerate(story):
                     fact = f"{fact_pair[0]} {fact_pair[1]}"
-                    for ent in all_entity:
-                        fact = fact.replace(ent, person_entitiy[ent])
                     fact_in.append(f"fact_{i}: {fact}")
                 facts.append(fact_in)
 
@@ -505,10 +477,11 @@ class MetaDataLoader():
             dev_attention_mask_batch = []
             dev_token_type_ids_batch = []
             labels_batch = []
-
+            dev_samples = []
             for qa_pair in qa_data["qa_pairs"]:
                 dev_input_txt = f"{qa_pair[0]}"
                 dev_output_txt = f"{qa_pair[2]}{eos}"
+                dev_samples.append((dev_input_txt, dev_output_txt.replace(eos, '')))
                 input_ids, attention_mask, token_type_ids = self._tensorize(
                     dev_input_txt, dev_output_txt)
                 # if self.args.classifier:
@@ -551,10 +524,8 @@ class MetaDataLoader():
                     fact[0] for fact in train_samples]
                 train_outputs = [
                     fact[1] for fact in train_samples]
-                dev_inputs_eval = [
-                    f"{bos}{qa_pair[0]}" for qa_pair in qa_data["qa_pairs"]]
-                dev_outputs = [str(qa_pair[1])
-                               for qa_pair in qa_data["qa_pairs"]]
+                dev_inputs_eval = [sample[0] for sample in dev_samples]
+                dev_outputs = [sample[1] for sample in dev_samples]
 
                 feature["print_out"].update({
                     "question": dev_inputs_eval,
