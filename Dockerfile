@@ -40,8 +40,9 @@ RUN pip3 install torch --extra-index-url https://download.pytorch.org/whl/cu116 
 
 # Copy code
 RUN mkdir -p output/
+RUN mkdir -p data/
 COPY meta_kg/ meta_kg/
-COPY data/ data/
+COPY data/clutrr_simple/ data/clutrr_simple/
 COPY run_gpt2.sh .
 
 ENTRYPOINT []
