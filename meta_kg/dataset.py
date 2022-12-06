@@ -1,4 +1,3 @@
-import os
 import re
 import random
 import uuid
@@ -8,10 +7,10 @@ import numpy as np
 
 from pprint import pprint
 from collections import Counter
-from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
+from torch.utils.data import DataLoader
+from torch.utils.data import RandomSampler, SequentialSampler
 
 from .utils.py_io import read_jsonl
-from .utils.datastructure import labels_to_bimap
 
 dataset_config = {
     "clutrr1": {
@@ -26,37 +25,13 @@ dataset_config = {
         "id_to_label": {},
         "num_labels": 0
     },
-    "proofwriter_owa_natlang": {
+    "proofwriter_owa": {
         "labels": ["true", "false", "unknown"],
         "label_to_id": {"true": 0, "false": 1, "unknown": 2},
         "id_to_label": {0: "true", 1: "false", 2: "unknown"},
         "num_labels": 3
     },
-    "proofwriter_owa_d0": {
-        "labels": ["true", "false", "unknown"],
-        "label_to_id": {"true": 0, "false": 1, "unknown": 2},
-        "id_to_label": {0: "true", 1: "false", 2: "unknown"},
-        "num_labels": 3
-    },
-    "proofwriter_owa_d5": {
-        "labels": ["true", "false", "unknown"],
-        "label_to_id": {"true": 0, "false": 1, "unknown": 2},
-        "id_to_label": {0: "true", 1: "false", 2: "unknown"},
-        "num_labels": 3
-    },
-    "proofwriter_cwa_natlang": {
-        "labels": ["true", "false"],
-        "label_to_id": {"true": 0, "false": 1},
-        "id_to_label": {0: "true", 1: "false"},
-        "num_labels": 2
-    },
-    "proofwriter_cwa_d0": {
-        "labels": ["true", "false"],
-        "label_to_id": {"true": 0, "false": 1},
-        "id_to_label": {0: "true", 1: "false"},
-        "num_labels": 2
-    },
-    "proofwriter_cwa_d5": {
+    "proofwriter": {
         "labels": ["true", "false"],
         "label_to_id": {"true": 0, "false": 1},
         "id_to_label": {0: "true", 1: "false"},
@@ -103,25 +78,20 @@ class ProofWriterDataReader():
         :param args: the configuration arguments
         :rtype instance: situation_modeling.readers.input_example.InputBase
         """
-
         questions = instance["questions"]
         triples = instance["triples"]
         rules = instance["rules"]
         guid = str(uuid.uuid4())
-
-        if dataset_config[args.dataset]["num_labels"] == 3:
-            prefix = "Is it true, false, or unknown that"
-        elif dataset_config[args.dataset]["num_labels"] == 2:
-            prefix = "Is it true or false that"
-        else:
-            prefix = ""
 
         true_pairs = []
         false_pairs = []
         unknown_paris = []
         for qa_item in questions.values():
             question = qa_item["question"].replace(".", "")
-            question = f"{prefix} {question}?"
+            triple_enum = [f"triple_{i}" for i in range(len(triples))]
+            rule_enum = [f"rule_{i}" for i in range(len(rules))]
+            prefix = f"Based on {' '.join(triple_enum)} {' '.join(rule_enum)},"
+            question = f"{prefix} can we say {question}?"
             answer = str(qa_item["answer"]).lower()
             if answer == "true":
                 true_pairs.append((question, answer))
@@ -202,7 +172,9 @@ class ClutrrDataReader():
             question = qa_item[0].replace("person", "")
             output = f"{qa_item[1]} {qa_item[2]}"
             answer = qa_item[2]
-            qa_pairs.append((question, output, answer))
+            fact_enum = [f"fact_{i}" for i in range(len(story))]
+            prefix = f"Based on {' '.join(fact_enum)}"
+            qa_pairs.append((f"{prefix}, {question}", output, answer))
 
         facts = []
         for item in qa_pairs:
@@ -254,12 +226,7 @@ class MetaKnowledgeDataset(object):
         self.args = args
 
         reader_classes = {
-            "proofwriter_owa_natlang": ProofWriterDataReader,
-            "proofwriter_cwa_natlang": ProofWriterDataReader,
-            "proofwriter_owa_d0": ProofWriterDataReader,
-            "proofwriter_owa_d5": ProofWriterDataReader,
-            "proofwriter_cwa_d0": ProofWriterDataReader,
-            "proofwriter_cwa_d5": ProofWriterDataReader,
+            "proofwriter": ProofWriterDataReader,
             "clutrr1": ClutrrDataReader,
             "clutrr": ClutrrDataReader
         }
@@ -271,6 +238,9 @@ class MetaKnowledgeDataset(object):
         self.load = False
 
         self.data = self.read_data_from_file()
+
+        if not self.is_training:
+            self.data = self.data[:5000]
 
     def __len__(self):
         return len(self.data)
@@ -375,10 +345,13 @@ class MetaDataLoader():
         eos = self.tokenizer.eos_token
         bos = self.tokenizer.bos_token
 
-        facts_batch = ["\n".join([fact for fact in data['facts']])
+        facts_batch = ["\n".join([f"{fact[0]} {fact[1]}" for fact in data['facts']])
                        for data in batch]
         questions = [f"{data['qa_pairs'][0][0]}" for data in batch]
-        answers = [data['qa_pairs'][0][1] for data in batch]
+        if len(batch[0]['qa_pairs'][0]) > 2:
+            answers = [data['qa_pairs'][0][2] for data in batch]
+        else:
+            answers = [data['qa_pairs'][0][1] for data in batch]
 
         max_length = 0
         inputs = []
@@ -417,7 +390,10 @@ class MetaDataLoader():
             labels = torch.cat(input_ids_batch, dim=0)
 
         print_inputs = [f"{txt_in}" for (txt_in, _) in inputs]
-        print_outputs = [data['qa_pairs'][0][1] for data in batch]
+        if len(batch[0]['qa_pairs'][0]) > 2:
+            print_outputs = [data['qa_pairs'][0][2] for data in batch]
+        else:
+            print_outputs = [data['qa_pairs'][0][1] for data in batch]
         print_out = {
             "guid": [data['guid'] for data in batch],
             "prefix": [self.args.dataset for data in batch],
@@ -451,7 +427,6 @@ class MetaDataLoader():
             train_input_ids_batch = []
             train_attention_mask_batch = []
             train_token_type_ids_batch = []
-
             train_samples = []
             for i, fact in enumerate(qa_data['facts']):
                 fact_pair = fact.split(':')
@@ -479,17 +454,15 @@ class MetaDataLoader():
             labels_batch = []
             dev_samples = []
             for qa_pair in qa_data["qa_pairs"]:
-                dev_input_txt = f"{qa_pair[0]}"
-                dev_output_txt = f"{qa_pair[2]}{eos}"
-                dev_samples.append((dev_input_txt, dev_output_txt.replace(eos, '')))
+                dev_input_txt = qa_pair[0]
+                if len(qa_pair) > 2:
+                    dev_output_txt = f"{qa_pair[2]}{eos}"
+                else:
+                    dev_output_txt = f"{qa_pair[1]}{eos}"
+                dev_samples.append(
+                    (dev_input_txt, dev_output_txt.replace(eos, '')))
                 input_ids, attention_mask, token_type_ids = self._tensorize(
                     dev_input_txt, dev_output_txt)
-                # if self.args.classifier:
-                #     encoded = self.tokenizer(
-                #         dev_input_txt, return_tensors="pt", return_token_type_ids=True)
-                #     input_ids = encoded["input_ids"]
-                #     attention_mask = encoded["attention_mask"]
-                #     token_type_ids = encoded["token_type_ids"]
                 dev_input_ids_batch.append(input_ids)
                 dev_attention_mask_batch.append(attention_mask)
                 dev_token_type_ids_batch.append(token_type_ids)
@@ -515,9 +488,10 @@ class MetaDataLoader():
                 "evaluate": self.evaluate
             }
 
-            # feature["input_ids"] = feature["train_input_ids"]
-            # feature["attention_mask"] = feature["train_attention_mask"]
-            # feature["token_type_ids"] = feature["train_token_type_ids"]
+            if self.args.align:
+                feature["input_ids"] = feature["train_input_ids"]
+                feature["attention_mask"] = feature["train_attention_mask"]
+                feature["token_type_ids"] = feature["train_token_type_ids"]
 
             if self.evaluate:
                 train_inputs = [
@@ -539,8 +513,9 @@ class MetaDataLoader():
                     "guid": [qa_data["guid"]]
                 }
 
-                # feature["print_out"]["question"] = feature["inner_print_out"]["prompt"]
-                # feature["print_out"]["answer"] = feature["inner_print_out"]["fact"]
+                if self.args.align:
+                    feature["print_out"]["question"] = train_inputs
+                    feature["print_out"]["answer"] = train_outputs
             batch_features.append(feature)
         return batch_features
 

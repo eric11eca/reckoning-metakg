@@ -10,14 +10,11 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, List
 from dataclasses import dataclass
-from sklearn.metrics import accuracy_score
-from transformers import TextGenerationPipeline
 from torch.nn import BCEWithLogitsLoss
 
 from transformers import (
     AutoConfig,
     AutoTokenizer,
-    T5Tokenizer,
     AutoModelForSeq2SeqLM,
     GPT2LMHeadModel,
     AutoModelForCausalLM,
@@ -34,60 +31,7 @@ model_class_registry = {
 }
 
 
-class GeneratorModel():
-    """Convenient class for implementing a standard generator model"""
-
-    def generate(
-        self,
-        input_ids,
-        attention_mask,
-        max_length=None,
-        min_length=None,
-        num_beams=None,
-        do_sample=None,
-        top_p=None,
-        top_k=None,
-        no_repeat_ngram_size=None,
-        num_return_sequences=None
-    ):
-        """Calls the underlying model generator. Low-level function
-        used during training and validation.
-
-        :param features: the input features to the model
-        :param max_length: the maximum length of the generated sequence
-        :param min_length: the minimum length of the generated sequence
-        :param num_beams: the number of beams to use for beam search
-        :param do_sample: whether to use sampling or not
-        :param top_p: the top-p value to use for sampling
-        :param top_k: the top-k value to use for sampling
-        :param no_repeat_ngram_size: the n-gram size to use for sampling
-        :param num_return_sequences: the number of sequences to return
-
-        :returns: the generated sequences
-        """
-        if do_sample and top_p:
-            top_k = 0
-        elif do_sample and top_k:
-            top_p = None
-
-        outputs = self.model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            max_length=max_length,
-            min_length=min_length,
-            num_beams=num_beams,
-            early_stopping=True,
-            top_p=top_p,
-            top_k=top_k,
-            do_sample=do_sample,
-            no_repeat_ngram_size=no_repeat_ngram_size,
-            num_return_sequences=num_return_sequences,
-            use_cache=True
-        )
-        return outputs
-
-
-class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
+class PretrainedEncoderDecoder(nn.Module):
     """Generic transformer-based pretrained encoder decoder (e.g., T5, BART, etc..)
     which has the added feature of doing on-the-fly generation during training and evaluation.
     """
@@ -98,19 +42,10 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
         self.model_config = model_config
         self.tokenizer = tokenizer
         self.global_config = global_config
-        self.pipe = TextGenerationPipeline(
-            model=model,
-            tokenizer=tokenizer,
-            device=global_config.device_idx,
-            return_full_text=False,
-            max_new_tokens=32,
-        )
 
-        # num_labels = dataset_config[global_config.dataset_type]["num_labels"]
         self.labels = dataset_config[global_config.dataset_type]["labels"]
         self.id_to_label = dataset_config[global_config.dataset_type]["id_to_label"]
-        # if global_config.classifier:
-        #     self.score = nn.Linear(model_config.n_embd, num_labels, bias=False)
+
         # self.lm_head_inner = nn.Linear(
         #     model_config.n_embd,
         #     model_config.vocab_size,
@@ -119,7 +54,6 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
         # self.lm_head_inner.load_state_dict(
         #     self.model.lm_head.state_dict()
         # )
-
         # self.lm_head_inner.requires_grad = False
 
     @classmethod
@@ -129,19 +63,9 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
         :param config: the global configuration
         """
         model_class = model_class_registry[config.model_type]
+        tokenizer = AutoTokenizer.from_pretrained(config.model_name_or_path)
         model = model_class.from_pretrained(config.model_name_or_path)
-
-        tokenizer = AutoTokenizer.from_pretrained(
-            config.model_name_or_path)
         model_config = AutoConfig.from_pretrained(config.model_name_or_path)
-
-        # if "gpt" in config.model_type:
-        # tokenizer.add_special_tokens({
-        #     'bos_token': '<|startoftext|>',
-        #     'eos_token': '<|endoftext|>',
-        # })
-
-        # model.resize_token_embeddings(len(tokenizer))
         model.config.pad_token_id = tokenizer.eos_token_id
 
         if config.freeze_partial:
@@ -178,21 +102,6 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
             return_dict=True
         )
 
-        # if self.global_config.classifier and not is_inner:
-        #     input_ids = features["input_ids"]
-        #     logits = self.score(outputs["hidden_states"][-1])
-        #     batch_size, _ = input_ids.shape[:2]
-        #     sequence_lengths = torch.ne(
-        #         input_ids, self.model.config.pad_token_id).sum(-1) - 1
-        #     pooled_logits = logits[torch.arange(
-        #         batch_size, device=logits.device), sequence_lengths]
-        #     loss_fct = BCEWithLogitsLoss()
-        #     loss = loss_fct(pooled_logits, features["labels"])
-        #     main_out["loss"] = loss
-        #     main_out["logits"] = pooled_logits
-        # elif self.global_config.model_type == "t5":
-        #     main_out["loss"] = outputs.loss
-
         # if is_inner:
         #     hidden_states = outputs["hidden_states"][-1]
         #     lm_logits = self.lm_head_inner(hidden_states)
@@ -212,7 +121,7 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
         loss = torch.sum(losses, axis=1) / torch.sum(label_mask, axis=1)
         main_out["loss"] = loss.mean()
 
-        if is_inner:
+        if is_inner and self.global_config.inner_verbose:
             main_out["token_loss"] = []
             for i in range(losses.size(0)):
                 main_out["token_loss"].append(
@@ -223,19 +132,47 @@ class PretrainedEncoderDecoder(nn.Module, GeneratorModel):
             main_out["print_out"]["topk_tokens"] = [batch_topk_tokens]
 
         if "evaluate" in features and features["evaluate"]:
-            if self.global_config.classifier:
-                pred = main_out["logits"].argmax(axis=1).cpu().numpy().tolist()
-                main_out["print_out"]["gen_out"] = [
-                    self.id_to_label[p] for p in pred]
+            if "question" in print_out:
+                main_out["print_out"]["gen_out"] = self.generate(print_out)
             else:
-                if "question" in print_out:
-                    main_out["print_out"]["gen_out"] = [
-                        self.pipe(q)[0]["generated_text"].strip() for q in main_out["print_out"]["question"]]
-                else:
-                    main_out["print_out"]["gen_out"] = [
-                        self.pipe(q)[0]["generated_text"].strip() for q in main_out["print_out"]["prompt"]]
-
+                main_out["print_out"]["gen_out"] = self.generate(
+                    main_out["print_out"]["prompt"])
         return main_out
+
+    def generate(self, print_out):
+        device = self.model.device
+
+        output_length = []
+        for answer in print_out["answer"]:
+            out_ids = self.tokenizer(answer, return_tensors="pt").input_ids
+            output_length.append(out_ids.size(1))
+        max_out_length = max(output_length)
+
+        input_ids_batch = []
+        for question in print_out["question"]:
+            input_ids = self.tokenizer(
+                question, return_tensors="pt").input_ids.to(device)
+            input_ids_batch.append(input_ids)
+
+        outputs = []
+        for input_ids in input_ids_batch:
+            max_length = input_ids.size(1) + max_out_length
+            greedy_output = self.model.generate(
+                input_ids=input_ids,
+                max_length=max_length,
+                num_beams=5,
+                early_stopping=True,
+                top_p=None,
+                top_k=5,
+                do_sample=False,
+                num_return_sequences=1,
+                use_cache=True)
+            out = self.tokenizer.decode(
+                greedy_output[0],
+                skip_special_tokens=True)
+            outputs.append(out)
+
+        return outputs
 
     def get_tok_tokens(self, norm_logits, input_ids, label_mask):
         batch_topk_tokens = []
@@ -451,7 +388,7 @@ class TranslationOutput:
         return white_space_fix(remove_articles(remove_punc(lower(text))))
 
     def compute_exact_match(self, prediction, truth):
-        return int(self.normalize_text(prediction) == self.normalize_text(truth))
+        return int(self.normalize_text(truth) in self.normalize_text(prediction))
 
     def compute_f1(self, prediction, truth):
         pred_tokens = self.normalize_text(prediction).split()
