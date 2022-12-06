@@ -41,6 +41,10 @@ def main():
                         help='Inner loop learning rate for SGD')
     parser.add_argument("--n_inner_iter", default=1, type=int,
                         help="Total number of inner training epochs to perform.")
+    parser.add_argument("--inner_verbose", action='store_true', default=False,
+                        help="Get detailed information and dynamic of inner loop learning.")
+    parser.add_argument("--align", action='store_true', default=False,
+                        help="Align the inner loop task with the outer loop task.")
 
     # Preprocessing/decoding-related parameters
     parser.add_argument("--max_seq_length", default=64, type=int)

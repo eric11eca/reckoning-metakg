@@ -1,3 +1,5 @@
+# DATASET="proofwriter_cwa_d0"
+# DATASET_TYPE="proofwriter"
 DATASET="clutrr_simple"
 DATASET_TYPE="clutrr"
 INPUT_FORMAT="lm"
@@ -7,9 +9,11 @@ TRAIN_BATCH_SIZE=2
 PREDICT_BATCH_SIZE=1
 INNER_MODE="open"
 GD_ACCUMULATE_STPES=1
-INNER_STEPS=2
-POSTFIX="single-head-relation-2-step"
-
+INNER_STEPS=1
+#POSTFIX="no-facts"
+POSTFIX="single-head"
+#POSTFIX="baseline"
+CHEKPOINT="./output/20221205-145455/epoch=0-step=18000.ckpt"
 
 python cli_maml.py \
     --do_train \
@@ -25,8 +29,13 @@ python cli_maml.py \
     --wandb_name ${INNER_MODE}-${DATASET}-${POSTFIX} \
     --inner_mode ${INNER_MODE} \
     --n_inner_iter ${INNER_STEPS} \
-    --callback_monitor val_f1 \
-    --device_idx 1
-    # --load_checkpoint output/20221129-195134/epoch=0-step=9000.ckpt
+    --callback_monitor val_acc \
+    --device_idx 0 \
+    --load_checkpoint ${CHEKPOINT}
+    # --align
+    # --baseline
+    # --no_facts \
+    # --align \
+    # --load_checkpoint ${CHEKPOINT}
     # --freeze_partial
     # --do_eval
