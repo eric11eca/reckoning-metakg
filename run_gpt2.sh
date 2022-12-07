@@ -1,6 +1,6 @@
 # DATASET="proofwriter_cwa_d0"
 # DATASET_TYPE="proofwriter"
-DATASET="clutrr_2_hot"
+DATASET="clutrr_2_hop"
 DATASET_TYPE="clutrr"
 INPUT_FORMAT="lm"
 MODEL_TYPE="gpt2"
@@ -15,6 +15,10 @@ INNER_OPT="adam"
 POSTFIX="adam-1-step"
 #POSTFIX="baseline"
 CHEKPOINT="./output/20221205-145455/epoch=0-step=18000.ckpt"
+
+echo "Downloading data..."
+mkdir -p data/${DATASET}
+wandb artifact get causal_scaffold/data_uploader/${DATASET}:latest --root data/${DATASET}
 
 python cli_maml.py \
     --do_train \

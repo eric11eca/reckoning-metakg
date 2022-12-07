@@ -44,12 +44,9 @@ RUN pip3 install torch -f https://download.pytorch.org/whl/cu117.html --default-
 
 # Copy code
 RUN mkdir -p output/
-RUN mkdir -p data/
 COPY meta_kg/ meta_kg/
 COPY run_maml.py .
 COPY cli_maml.py .
-COPY data/proofwriter/ data/proofwriter/
-COPY data/clutrr_2_hop/ data/clutrr_2_hop/
 COPY run_gpt2.sh .
 
 ENTRYPOINT []
