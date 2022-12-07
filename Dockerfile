@@ -1,10 +1,10 @@
-FROM nvidia/cuda:11.6.0-cudnn8-runtime-ubuntu18.04
+FROM python:3.9.15-slim
 
-# ENV LC_ALL=C.UTF-8
-# ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV LANG=C.UTF-8
 
-# ENV PATH /usr/local/nvidia/bin/:$PATH
-# ENV LD_LIBRARY_PATH /usr/local/nvidia/lib:/usr/local/nvidia/lib64
+ENV PATH /usr/local/nvidia/bin/:$PATH
+ENV LD_LIBRARY_PATH /usr/local/nvidia/lib:/usr/local/nvidia/lib64
 
 # Tell nvidia-docker the driver spec that we need as well as to
 # use all available devices, which are mounted at /usr/local/nvidia.
@@ -29,24 +29,27 @@ RUN apt-get update --fix-missing && apt-get install -y \
     libxext6 \
     libxrender1 \
     wget \
-    python3 \
-    python3-pip \
+    vim \
+    nano \
+    tmux \
     libevent-dev \
     build-essential && \
     rm -rf /var/lib/apt/lists/* 
 
 # Install requirements
 COPY requirements.txt .
-RUN pip3 install setuptools-rust
 RUN pip3 install --upgrade pip
 RUN pip3 install -r requirements.txt --default-timeout=1000
-RUN pip3 install torch --extra-index-url https://download.pytorch.org/whl/cu116 --default-timeout=1000 
+RUN pip3 install torch -f https://download.pytorch.org/whl/cu117.html --default-timeout=1000 
 
 # Copy code
 RUN mkdir -p output/
 RUN mkdir -p data/
 COPY meta_kg/ meta_kg/
-COPY data/clutrr_simple/ data/clutrr_simple/
+COPY run_maml.py .
+COPY cli_maml.py .
+COPY data/proofwriter/ data/proofwriter/
+COPY data/clutrr_2_hop/ data/clutrr_2_hop/
 COPY run_gpt2.sh .
 
 ENTRYPOINT []

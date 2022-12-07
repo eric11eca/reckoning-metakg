@@ -1,4 +1,4 @@
-NUM=1
+NUM=3
 
 CURRENT=${NUM}
 IMAGE_NAME=meta_kg
@@ -12,7 +12,9 @@ echo "Building $IM_NAME"
 docker buildx build --platform linux/amd64 --load -f $DOCKERFILE_NAME -t $IM_NAME --cache-from type=local,src=../../.docker_cache --cache-to type=local,mode=max,dest=../../.docker_cache .
 
 echo "Pushing $IM_NAME to Harbor"
-docker tag $IMAGE ic-registry.epfl.ch/nlp/$IMAGE
-docker push ic-registry.epfl.ch/nlp/$IMAGE
+docker tag $IM_NAME ic-registry.epfl.ch/nlp/$IM_NAME
+docker push ic-registry.epfl.ch/nlp/$IM_NAME
 
-# export KUBECONFIG=~/.kube/config_runai
+export KUBECONFIG=~/.kube/config_runai
+
+# runai submit --name meta-kg-cuda -i ic-registry.epfl.ch/nlp/meta_kg_2 --interactive --attach -g 1
