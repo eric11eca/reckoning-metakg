@@ -85,9 +85,7 @@ class PretrainedEncoderDecoder(nn.Module):
         )
 
     def forward(self, features, print_out, is_inner=False):
-        """A modified version of forward method for the underlying
-           `ConditionalSequenceGeneration` model. It combines loss
-           measurement and generation into one step.
+        """A modified version of forward method for the underlying transformer model.
         :param features: the target inputs
         :param print_out: data to print out during evaluation
         """

@@ -200,10 +200,16 @@ class MetaKnowledgeRunner(pl.LightningModule):
                 model_params.append(
                     {"params": param, "lr": self.hparams.inner_lr})
 
-        inner_opt = torch.optim.SGD(
-            model_params,
-            momentum=0.9,
-        )
+        if self.hparams.inner_opt == "adam":
+            inner_opt = torch.optim.Adam(
+                model_params,
+                amsgrad=False
+            )
+        else:
+            inner_opt = torch.optim.SGD(
+                model_params,
+                momentum=0.9,
+            )
 
         loss = torch.tensor(0., device=self.device)
         outer_loss = torch.tensor(0., device='cpu')

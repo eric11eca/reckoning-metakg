@@ -37,6 +37,8 @@ def main():
     # Meta Learn parameters
     parser.add_argument('--inner_mode', type=str, default='open',
                         help='open book or closed book: [open, closed]')
+    parser.add_argument('--inner_opt', type=str, default='sgd',
+                        help='inner optimizer choice: [sgd, adam]')
     parser.add_argument('--inner_lr', type=float, default=1e-5,
                         help='Inner loop learning rate for SGD')
     parser.add_argument("--n_inner_iter", default=1, type=int,
