@@ -64,7 +64,8 @@ def init_wandb_logger(config):
     wandb_logger = WandbLogger(
         project=config.wandb_project,
         entity=config.wandb_entity,
-        name=config.wandb_name
+        name=config.wandb_name,
+        log_model="all"
     )
     return wandb_logger
 

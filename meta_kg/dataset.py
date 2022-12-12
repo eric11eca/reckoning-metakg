@@ -239,8 +239,8 @@ class MetaKnowledgeDataset(object):
 
         self.data = self.read_data_from_file()
 
-        if not self.is_training:
-            self.data = self.data[:5000]
+        # if not self.is_training:
+        #     self.data = self.data[:5000]
 
     def __len__(self):
         return len(self.data)

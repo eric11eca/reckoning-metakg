@@ -271,7 +271,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
                         print_outs.append(dev_out["print_out"])
         output_dict = {
             'loss': loss,
-            'inner_loss_diff': inner_loss_diff / len(batch),
+            "inner_loss_diff": inner_loss_diff / len(batch),
             'inner_loss': inner_loss / len(batch),
             'outer_loss': outer_loss / len(batch),
         }
@@ -302,7 +302,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
             )
         else:
             output_dict = self.step(batch, is_train=True)
-            for mkey in ["inner_loss_diff", "inner_loss", "outer_loss"]:
+            for mkey in ["inner_loss", "outer_loss"]:
                 self.log(
                     f'batch_{mkey}',
                     output_dict[mkey],
@@ -381,7 +381,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
                     output_dict[mkey],
                     on_step=True,
                     on_epoch=False,
-                    prog_bar=True
+                    prog_bar=False
                 )
         return output_dict
 

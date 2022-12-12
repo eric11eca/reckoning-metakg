@@ -10,7 +10,6 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, List
 from dataclasses import dataclass
-from torch.nn import BCEWithLogitsLoss
 
 from transformers import (
     AutoConfig,
