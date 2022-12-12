@@ -4,13 +4,16 @@ import wandb
 import pathlib
 import pytorch_lightning as pl
 
-from pathlib import Path
 from pytorch_lightning.loggers import WandbLogger
 
 
 util_logger = logging.getLogger('meta_knowledge.utils.wandb_utils')
 
-WANDB_CACHE = str(pathlib.PosixPath('~/.wandb_cache').expanduser())
+try:
+    WANDB_CACHE = str(pathlib.PosixPath('~/.wandb_cache').expanduser())
+except NotImplementedError:
+    pathlib.PosixPath = pathlib.WindowsPath
+    WANDB_CACHE = str(pathlib.PosixPath('~/.wandb_cache').expanduser())
 
 
 def create_wandb_vars(config):

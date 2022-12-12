@@ -354,12 +354,14 @@ class TranslationOutput:
         targets = self.targets
         outputs = self.outputs
 
+        preds = [out.split('?')[1].strip() for out in outputs]
+
         metrics = {}
-        if targets and outputs and len(targets) == len(outputs):
+        if targets and preds and len(targets) == len(preds):
             em_scores = [self.compute_exact_match(
-                gen, label) for label, gen in zip(targets, outputs)]
+                gen, label) for label, gen in zip(targets, preds)]
             f1_scores = [self.compute_f1(gen, label)
-                         for label, gen in zip(targets, outputs)]
+                         for label, gen in zip(targets, preds)]
 
             metrics["acc"] = sum(em_scores) / len(targets)
             metrics["f1"] = sum(f1_scores) / len(targets)

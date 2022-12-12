@@ -44,8 +44,9 @@ class MetaKnowledgeRunner(pl.LightningModule):
             num_inner_iter=config.n_inner_iter,
             init_lr=config.inner_lr
         )
-        self.inner_schedular.initialization(
-            self.model.named_parameters())
+        if not config.baseline:
+            self.inner_schedular.initialization(
+                self.model.named_parameters())
 
         self.load_dataset()
         self.model_logger.info(
