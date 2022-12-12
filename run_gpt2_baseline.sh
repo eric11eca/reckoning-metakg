@@ -17,7 +17,7 @@ python cli_maml.py \
     --predict_batch_size ${PREDICT_BATCH_SIZE} \
     --learning_rate 3e-5 \
     --wandb_name baseline-${DATASET} \
-    --device_idx 3
+    --device_idx 0
     # --do_eval \
     # --no_facts
     # --classifier \
