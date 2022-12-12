@@ -1,6 +1,8 @@
+#!/bin/bash
+
 # DATASET="proofwriter_cwa_d0"
 # DATASET_TYPE="proofwriter"
-DATASET="clutrr_2_hop"
+DATASET="clutrr_6_hop"
 DATASET_TYPE="clutrr"
 INPUT_FORMAT="lm"
 MODEL_TYPE="gpt2"
@@ -9,11 +11,11 @@ TRAIN_BATCH_SIZE=2
 PREDICT_BATCH_SIZE=1
 INNER_MODE="open"
 GD_ACCUMULATE_STPES=1
-INNER_STEPS=1
+INNER_STEPS=4
 INNER_OPT="adam"
 #POSTFIX="no-facts"
-POSTFIX="adam-1-step"
 #POSTFIX="baseline"
+POSTFIX="adam-4-step-t2"
 CHEKPOINT="./output/20221205-145455/epoch=0-step=18000.ckpt"
 
 echo "Downloading data..."
@@ -36,6 +38,7 @@ python cli_maml.py \
     --inner_opt ${INNER_OPT} \
     --n_inner_iter ${INNER_STEPS} \
     --callback_monitor val_acc \
+    --wandb_checkpoint \
     --device_idx 0
     # --load_checkpoint ${CHEKPOINT}
     # --align
