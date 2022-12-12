@@ -52,10 +52,7 @@ COPY run_gpt2.sh /nlp/
 COPY upload_wandb_data.sh /nlp/
 COPY test.py /nlp/
 
-RUN chmod 777 /nlp/run_gpt2.sh
-
 ENV WANDB_API_KEY 5d22b1d85f1fd5bb0c5758b93903c364ee5dc93d
 
-ENTRYPOINT ["/nlp/run_gpt2.sh"]
-# ENTRYPOINT ["python"]
+ENTRYPOINT ["./run_gpt2.sh"]
 # CMD ["/bin/bash"]

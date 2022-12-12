@@ -1,8 +1,8 @@
-NUM=3
+NUM=7
 
 CURRENT=${NUM}
 IMAGE_NAME=meta_kg
-DOCKERFILE_NAME=Dockerfile
+DOCKERFILE_NAME=DockerfileV2
 
 GIT_HASH=`git log --format="%h" -n 1`
 IMAGE=$IMAGE_NAME_$USER-$GIT_HASH
@@ -17,4 +17,4 @@ docker push ic-registry.epfl.ch/nlp/$IM_NAME
 
 export KUBECONFIG=~/.kube/config_runai
 
-# runai submit --name meta-kg-cuda -i ic-registry.epfl.ch/nlp/meta_kg_2 --interactive --attach -g 1
+# runai submit --name meta-kg-clutrr4 -i ic-registry.epfl.ch/nlp/meta_kg_4 --interactive --attach -g 1

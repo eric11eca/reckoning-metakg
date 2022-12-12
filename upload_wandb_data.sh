@@ -1,3 +1,5 @@
+#!/bin/bash
+
 DATA_PATH=$1
 DATA_NAME=$2
 
