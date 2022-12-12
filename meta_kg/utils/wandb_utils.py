@@ -29,15 +29,11 @@ def create_wandb_vars(config):
         os.environ["WANDB_PROJECT"] = config.wandb_project
     if config.wandb_entity:
         os.environ["WANDB_ENTITY"] = config.wandb_entity
-    if config.wandb_note:
-        os.environ["WANDB_NOTE"] = config.wandb_note
 
     if config.wandb_name or config.wandb_project or config.wandb_entity:
         util_logger.info(
-            'WANDB settings (options), name=%s, project=%s, entity=%s, note=%s' %
-            (config.wandb_name, config.wandb_project,
-             config.wandb_entity, config.wandb_note)
-        )
+            'WANDB settings (options), name=%s, project=%s, entity=%s' %
+            (config.wandb_name, config.wandb_project, config.wandb_entity))
 
 
 def download_wandb_data(config):
@@ -64,11 +60,12 @@ def init_wandb_logger(config):
 
     :param config: the global configuration 
     """
+    log_model = "all" if config.wandb_model else False
     wandb_logger = WandbLogger(
         project=config.wandb_project,
         entity=config.wandb_entity,
         name=config.wandb_name,
-        log_model="all"
+        log_model=log_model
     )
     return wandb_logger
 

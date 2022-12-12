@@ -20,7 +20,7 @@ def main():
     # Basic parameters
     parser.add_argument("--train_dir", default="data")
     parser.add_argument("--predict_dir", default="data")
-    parser.add_argument("--dataset", default="proofwriter_owa_natlang")
+    parser.add_argument("--dataset", default="clutrr_6_hop")
     parser.add_argument("--dataset_type", default="clutrr")
     parser.add_argument("--model_name_or_path",
                         default="gpt2", required=False)
@@ -55,9 +55,9 @@ def main():
     # Training-related parameters
     parser.add_argument("--fact_batch_size", default=8, type=int,
                         help="Batch size per GPU/CPU for training.")
-    parser.add_argument("--train_batch_size", default=1, type=int,
+    parser.add_argument("--train_batch_size", default=16, type=int,
                         help="Batch size per GPU/CPU for training.")
-    parser.add_argument("--predict_batch_size", default=1, type=int,
+    parser.add_argument("--predict_batch_size", default=8, type=int,
                         help="Batch size per GPU/CPU for evaluation.")
     parser.add_argument("--learning_rate", default=3e-5, type=float,
                         help="The initial learning rate for Adam.")
@@ -107,19 +107,13 @@ def main():
     parser.add_argument('--wandb_entity', type=str, default='causal_scaffold')
     parser.add_argument('--wandb_project', type=str, default='meta_knowledge')
     parser.add_argument('--wandb_name', type=str,
-                        default='test_classifier_dkg_owa')
-    parser.add_argument('--wandb_data', type=str,
-                        default='')
-    parser.add_argument("--wandb_note",
-                        dest="wandb_note",
-                        default='empty',
-                        type=str,
-                        help="The note to use for the wandb [default='empty']")
-    parser.add_argument("--wandb_model",
-                        dest="wandb_model",
-                        default='',
-                        type=str,
-                        help="Specifies a location to an existing wandb model [default='']")
+                        default='baseline-clutrr_6_hop')
+    parser.add_argument('--wandb_data', type=str, default='',
+                        help="Specifies an existing wandb dataset")
+    parser.add_argument("--wandb_model", type=str, default='',
+                        help="Specifies an existing wandb model")
+    parser.add_argument('--wandb_checkpoint', action='store_true', default=False,
+                        help="Save best checkpoints to wandb")
 
     args = parser.parse_args()
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir):
