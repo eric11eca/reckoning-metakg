@@ -1,12 +1,10 @@
 rich
 tqdm
 wandb
-jupyter
 pytorch-lightning
 torchmetrics
 sentence_transformers
 transformers
-sklearn
+scikit-learn
 datasets
-higher
 deepspeed

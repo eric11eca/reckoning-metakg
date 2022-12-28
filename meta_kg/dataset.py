@@ -1,55 +1,12 @@
-import random
 import uuid
 import torch
+import random
 
 from pprint import pprint
-from learn2learn.data import MetaDataset
 from torch.utils.data import DataLoader
 from torch.utils.data import RandomSampler, SequentialSampler
 
 from .utils.py_io import read_jsonl
-
-dataset_config = {
-    "clutrr1": {
-        "labels": ["yes", "no", "maybe"],
-        "label_to_id": {"yes": 0, "no": 1, "maybe": 2},
-        "id_to_label": {0: "yes", 1: "no", 2: "maybe"},
-        "num_labels": 3
-    },
-    "clutrr": {
-        "labels": [],
-        "label_to_id": {},
-        "id_to_label": {},
-        "num_labels": 0
-    },
-    "proofwriter_owa": {
-        "labels": ["true", "false", "unknown"],
-        "label_to_id": {"true": 0, "false": 1, "unknown": 2},
-        "id_to_label": {0: "true", 1: "false", 2: "unknown"},
-        "num_labels": 3
-    },
-    "proofwriter": {
-        "labels": ["true", "false"],
-        "label_to_id": {"true": 0, "false": 1},
-        "id_to_label": {0: "true", 1: "false"},
-        "num_labels": 2
-    },
-}
-
-
-def kg_as_span_reconstruction(triples, rules):
-    facts = []
-    for kg in triples.values():
-        text = kg['text']
-        mask = kg['representation'].split('" "')[-2].strip()
-        facts.append((text.replace(mask, "<extra_id_0>"),
-                      f"<extra_id_0> {mask} <extra_id_1>"))
-    for kg in rules.values():
-        text = kg['text']
-        mask = kg['representation'].split('" "')[-2].strip()
-        facts.append((text.replace(mask, "<extra_id_0>"),
-                      f"<extra_id_0> {mask} <extra_id_1>"))
-    return facts
 
 
 def kg_as_autoregressive(triples, rules, baseline=False):
@@ -75,53 +32,36 @@ class ProofWriterDataReader():
         :param args: the configuration arguments
         :rtype instance: situation_modeling.readers.input_example.InputBase
         """
-        questions = instance["questions"]
-        triples = instance["triples"]
-        rules = instance["rules"]
-        guid = str(uuid.uuid4())
+        answer_map = {
+            "true": "yes",
+            "false": "no",
+        }
+        guid = instance["guid"]
+        question = instance["question"]
+        context = instance["facts"]
+        answer = answer_map[instance["answer"]]
 
-        true_pairs = []
-        false_pairs = []
-        unknown_paris = []
-        for qa_item in questions.values():
-            question = qa_item["question"].replace(".", "")
-            triple_enum = [f"triple_{i}" for i in range(len(triples))]
-            rule_enum = [f"rule_{i}" for i in range(len(rules))]
-            prefix = f"Based on {' '.join(triple_enum)} {' '.join(rule_enum)},"
-            question = f"{prefix} can we say {question}?"
-            answer = str(qa_item["answer"]).lower()
-            if answer == "true":
-                true_pairs.append((question, answer))
-            elif answer == "false":
-                false_pairs.append((question, answer))
+        fact_enum = [f"fact_{i}" for i in range(len(context))]
+        prefix = f"Based on {' '.join(fact_enum)}"
+        example = (f"{prefix}, Can we conclude {question}?", answer)
+        qa_pairs = [example]
+
+        facts = []
+        for item in qa_pairs:
+            question = item[0]
+            question = question.replace("?", "")
+            if args.inner_mode == "closed":
+                prefix = f"To determine {question}, we need to know"
+                facts.append(
+                    [f"{prefix} fact_{i}: {fact}" for i, fact in enumerate(context)])
+            elif args.baseline:
+                facts.append([fact for fact in context])
             else:
-                unknown_paris.append((question, answer))
-
-        qa_pairs = []
-        qa_pairs.append(random.choice(true_pairs))
-        qa_pairs.append(random.choice(false_pairs))
-
-        if len(unknown_paris) > 0:
-            qa_pairs += random.choices(
-                unknown_paris,
-                k=len(unknown_paris) // 2
-            )
-
-        if args.input_format == "mlm":
-            facts = kg_as_span_reconstruction(triples, rules)
-        else:
-            facts = []
-            for item in qa_pairs:
-                question = item[0].replace(f"{prefix} ", "")
-                question = question.replace("?", "")
-                parsed_facts = kg_as_autoregressive(
-                    triples, rules, args.baseline)
-
-                if args.inner_mode == "closed":
-                    prefix = f"To determine if {question}, we need to know"
-                    facts.append([f"{prefix} {fact}" for fact in parsed_facts])
-                else:
-                    facts.append(parsed_facts)
+                fact_in = []
+                for i, fact_pair in enumerate(context):
+                    fact = f"{fact_pair[0]} {fact_pair[1]}"
+                    fact_in.append(f"fact_{i}: {fact}")
+                facts.append(fact_in)
 
         return [{"guid": guid, "qa_pairs": [qa_pairs[i]], "facts": facts[i]} for i in range(len(qa_pairs))]
 
@@ -272,8 +212,6 @@ class MetaDataLoader():
         self.dataset = dataset
         self.tokenizer = tokenizer
         self.evaluate = not is_training
-        self.num_classes = dataset_config[self.task]["num_labels"]
-        self.label_to_id = dataset_config[self.task]["label_to_id"]
 
         if is_training:
             sampler = RandomSampler(dataset)

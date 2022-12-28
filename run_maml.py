@@ -200,7 +200,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
                     {"params": param, "lr": self.hparams.inner_lr})
 
         if self.hparams.inner_opt == "adam":
-            inner_opt = torch.optim.Adam(
+            inner_opt = torch.optim.AdamW(
                 model_params,
                 amsgrad=False
             )
