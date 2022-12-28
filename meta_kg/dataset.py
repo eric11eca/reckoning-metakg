@@ -58,8 +58,7 @@ class ProofWriterDataReader():
                 facts.append([fact for fact in context])
             else:
                 fact_in = []
-                for i, fact_pair in enumerate(context):
-                    fact = f"{fact_pair[0]} {fact_pair[1]}"
+                for i, fact in enumerate(context):
                     fact_in.append(f"fact_{i}: {fact}")
                 facts.append(fact_in)
 

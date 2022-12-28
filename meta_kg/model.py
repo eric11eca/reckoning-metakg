@@ -20,7 +20,6 @@ from transformers import (
 )
 
 from meta_kg.utils.py_io import write_json
-from meta_kg.dataset import dataset_config
 
 model_class_registry = {
     "t5": AutoModelForSeq2SeqLM,
@@ -41,9 +40,6 @@ class PretrainedEncoderDecoder(nn.Module):
         self.model_config = model_config
         self.tokenizer = tokenizer
         self.global_config = global_config
-
-        self.labels = dataset_config[global_config.dataset_type]["labels"]
-        self.id_to_label = dataset_config[global_config.dataset_type]["id_to_label"]
 
         # self.lm_head_inner = nn.Linear(
         #     model_config.n_embd,
@@ -219,11 +215,11 @@ class PretrainedEncoderDecoder(nn.Module):
         """
         metrics = {}
         sout = TranslationOutput.from_output(
-            self.global_config, raw_output, self.labels)
+            self.global_config, raw_output)
         scores = sout.compute_metrics()
-        class_scores = sout.fine_grained_metrics()
         metrics.update(scores)
-        metrics.update(class_scores)
+        # class_scores = sout.fine_grained_metrics()
+        # metrics.update(class_scores)
         return (sout, metrics)
 
     def evaluate_output(self, output, out_file=None, metric_file=None, is_test=False):
