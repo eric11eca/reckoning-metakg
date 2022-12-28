@@ -40,7 +40,9 @@ RUN apt-get update --fix-missing && apt-get install -y \
 COPY requirements.txt .
 RUN pip3 install --upgrade pip
 RUN pip3 install -r requirements.txt --default-timeout=1000
-RUN pip3 install torch -f https://download.pytorch.org/whl/cu117.html --default-timeout=1000 
+# RUN pip3 install torch -f https://download.pytorch.org/whl/cu117.html --default-timeout=1000
+RUN git clone https://github.com/facebookresearch/higher.git
+RUN cd higher && pip3 install .
 
 # Copy code
 RUN mkdir -p /nlp
