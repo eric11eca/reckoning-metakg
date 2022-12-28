@@ -9,3 +9,4 @@ transformers
 sklearn
 datasets
 higher
+deepspeed

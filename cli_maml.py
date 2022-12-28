@@ -101,6 +101,8 @@ def main():
                         help="Use a subset of data for debugging")
     parser.add_argument('--seed', type=int, default=42,
                         help="random seed for initialization")
+    parser.add_argument('--max_data', type=int, default=0,
+                        help="max number of data points to do prediction")
 
     parser.add_argument("--wandb_api_key", type=str, default="5d22b1d85f1fd5bb0c5758b93903c364ee5dc93d",
                         help="The particular wandb api key to use [default='']")

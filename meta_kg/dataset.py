@@ -1,12 +1,9 @@
-import re
 import random
 import uuid
-import string
 import torch
-import numpy as np
 
 from pprint import pprint
-from collections import Counter
+from learn2learn.data import MetaDataset
 from torch.utils.data import DataLoader
 from torch.utils.data import RandomSampler, SequentialSampler
 
@@ -238,9 +235,8 @@ class MetaKnowledgeDataset(object):
         self.load = False
 
         self.data = self.read_data_from_file()
-
-        # if not self.is_training:
-        #     self.data = self.data[:5000]
+        if not self.is_training and args.max_data > 0:
+            self.data = random.choices(self.args.max_data)
 
     def __len__(self):
         return len(self.data)
@@ -640,40 +636,3 @@ class MetaDataLoader():
             })
 
         return feature
-
-
-def f1_score(prediction, ground_truth):
-    prediction_tokens = normalize_answer(prediction).split()
-    ground_truth_tokens = normalize_answer(ground_truth).split()
-    common = Counter(prediction_tokens) & Counter(ground_truth_tokens)
-    num_same = sum(common.values())
-    if num_same == 0:
-        return 0
-    precision = 1.0 * num_same / len(prediction_tokens)
-    recall = 1.0 * num_same / len(ground_truth_tokens)
-    f1 = (2 * precision * recall) / (precision + recall)
-    return f1
-
-
-def get_f1_over_list(prediction, groundtruth):
-    if type(groundtruth) == list:
-        if len(groundtruth) == 0:
-            return 0
-        return np.max([f1_score(prediction, gt) for gt in groundtruth])
-    return f1_score(prediction, groundtruth)
-
-
-def normalize_answer(s):
-    def remove_articles(text):
-        return re.sub(r'\b(a|an|the)\b', ' ', text)
-
-    def white_space_fix(text):
-        return ' '.join(text.split())
-
-    def remove_punc(text):
-        exclude = set(string.punctuation)
-        return ''.join(ch for ch in text if ch not in exclude)
-
-    def lower(text):
-        return text.lower()
-    return white_space_fix(remove_articles(remove_punc(lower(s))))

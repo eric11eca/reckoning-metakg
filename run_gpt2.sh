@@ -2,7 +2,7 @@
 
 # DATASET="proofwriter_cwa_d0"
 # DATASET_TYPE="proofwriter"
-DATASET="clutrr_6_hop"
+DATASET="clutrr_4_hop"
 DATASET_TYPE="clutrr"
 INPUT_FORMAT="lm"
 MODEL_TYPE="gpt2"
@@ -11,12 +11,12 @@ TRAIN_BATCH_SIZE=2
 PREDICT_BATCH_SIZE=1
 INNER_MODE="open"
 GD_ACCUMULATE_STPES=1
-INNER_STEPS=4
+INNER_STEPS=6
 INNER_OPT="adam"
 #POSTFIX="no-facts"
 #POSTFIX="baseline"
 POSTFIX="adam-4-step-t2"
-CHEKPOINT="./output/20221205-145455/epoch=0-step=18000.ckpt"
+CHEKPOINT="./output/model.ckpt"
 
 echo "Downloading data..."
 mkdir -p data/${DATASET}
