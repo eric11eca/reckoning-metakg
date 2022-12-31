@@ -43,7 +43,7 @@ class ProofWriterDataReader():
 
         fact_enum = [f"fact_{i}" for i in range(len(context))]
         prefix = f"Based on {' '.join(fact_enum)}"
-        example = (f"{prefix}, Can we conclude {question}?", answer)
+        example = [f"{prefix}, Can we conclude {question}?", answer]
         qa_pairs = [example]
 
         facts = []
@@ -61,6 +61,8 @@ class ProofWriterDataReader():
                 for i, fact in enumerate(context):
                     fact_in.append(f"fact_{i}: {fact}")
                 facts.append(fact_in)
+                if args.multi_task:
+                    item[1] = f"{item[1]} because {','.join(context)}"
 
         return [{"guid": guid, "qa_pairs": [qa_pairs[i]], "facts": facts[i]} for i in range(len(qa_pairs))]
 
@@ -127,7 +129,73 @@ class ClutrrDataReader():
                 for i, fact_pair in enumerate(story):
                     fact = f"{fact_pair[0]} {fact_pair[1]}"
                     fact_in.append(f"fact_{i}: {fact}")
+
+                if args.multi_task:
+                    item[2] = f"{item[2]} because {','.join(story)}"
                 facts.append(fact_in)
+
+        return [{"guid": guid, "qa_pairs": [qa_pairs[i]], "facts": facts[i]} for i in range(len(qa_pairs))]
+
+    @classmethod
+    def jsonl_file_reader(cls, path, config):
+        """The method responsible for parsing in the input file. Implemented here
+        to make the overall pipeline more transparent.
+
+        :param path: the path to the target data file
+        :param evaluation: indicator as to where this is an evaluation file (based on name)
+        :param config: the configuration
+        """
+        total_data = read_jsonl(path)
+
+        total_qa_data = []
+        for instance in total_data:
+            qa_data = cls._read(instance, config)
+
+            total_qa_data += qa_data
+
+        for data in total_qa_data[:2]:
+            pprint(data)
+
+        return total_qa_data
+
+
+class EntailmentTreeDataReader():
+    """Custom dataset loader for QA problems with associated knowledge facts."""
+
+    @staticmethod
+    def _read(instance, args):
+        """Reads a single json line from the target file. Modify here when the json schema changes
+
+        :param instance: the instance to be read
+        :param args: the configuration arguments
+        :rtype instance: situation_modeling.readers.input_example.InputBase
+        """
+        guid = instance["guid"]
+        question = instance["hypothesis"]
+        context = instance["facts"]
+        answer = instance["answer"]
+
+        fact_enum = [f"fact_{i}" for i in range(len(context))]
+        prefix = f"Based on {' '.join(fact_enum)}"
+        example = [f"{prefix}, Can we conclude {question}?", answer]
+        qa_pairs = [example]
+
+        facts = []
+        for item in qa_pairs:
+            question = item[0]
+            question = question.replace("?", "")
+            if args.inner_mode == "closed":
+                prefix = f"To determine {question}, we need to know"
+                facts.append(
+                    [f"{prefix} fact_{i}: {fact}" for i, fact in enumerate(context)])
+            elif args.baseline:
+                facts.append([fact for fact in context])
+            else:
+                fact_in = []
+                for i, fact in enumerate(context):
+                    fact_in.append(f"fact_{i}: {fact}")
+                facts.append(fact_in)
+                # item[1] = f"{item[1]} because {','.join(context)}"
 
         return [{"guid": guid, "qa_pairs": [qa_pairs[i]], "facts": facts[i]} for i in range(len(qa_pairs))]
 
@@ -164,7 +232,8 @@ class MetaKnowledgeDataset(object):
         reader_classes = {
             "proofwriter": ProofWriterDataReader,
             "clutrr1": ClutrrDataReader,
-            "clutrr": ClutrrDataReader
+            "clutrr": ClutrrDataReader,
+            "entailment_tree": EntailmentTreeDataReader,
         }
         self.reader = reader_classes[args.dataset_type]
         self.is_training = is_training
@@ -399,15 +468,8 @@ class MetaDataLoader():
                 dev_input_ids_batch.append(input_ids)
                 dev_attention_mask_batch.append(attention_mask)
                 dev_token_type_ids_batch.append(token_type_ids)
-
-                if self.args.classifier:
-                    labels = torch.nn.functional.one_hot(
-                        torch.tensor([self.label_to_id[str(qa_pair[1])]]),
-                        num_classes=self.num_classes
-                    ).to(torch.float)
-                    labels_batch.append(labels)
-                else:
-                    labels_batch.append(input_ids)
+                
+                labels_batch.append(input_ids)
 
             feature = {
                 "input_ids": torch.cat(dev_input_ids_batch, dim=0),

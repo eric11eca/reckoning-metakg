@@ -47,6 +47,10 @@ def main():
                         help="Get detailed information and dynamic of inner loop learning.")
     parser.add_argument("--align", action='store_true', default=False,
                         help="Align the inner loop task with the outer loop task.")
+    parser.add_argument("--multi_task", action='store_true', default=False,
+                        help="Multi-task learning inner and outer tasks.")
+    parser.add_argument("--multi_objective", action='store_true', default=False,
+                        help="Multi-task learning inner and outer objective.")
 
     # Preprocessing/decoding-related parameters
     parser.add_argument("--max_seq_length", default=64, type=int)
