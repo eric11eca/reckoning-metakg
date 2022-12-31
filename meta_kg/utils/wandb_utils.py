@@ -60,7 +60,7 @@ def init_wandb_logger(config):
 
     :param config: the global configuration 
     """
-    log_model = "all" if config.wandb_model else False
+    log_model = "all" if config.wandb_checkpoint else False
     wandb_logger = WandbLogger(
         project=config.wandb_project,
         entity=config.wandb_entity,

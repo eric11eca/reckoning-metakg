@@ -49,14 +49,15 @@ class LSLRSchedular(nn.Module):
                 )
         else:
             self.names_lr_dict = nn.ParameterDict()
-            for k, _ in named_parameters:
-                key = k.replace(".", "-")
-                init_lr_group = torch.ones(
-                    self.num_inner_iter + 1) * self.init_lr
-                self.names_lr_dict[key] = nn.Parameter(
-                    data=init_lr_group,
-                    requires_grad=True
-                )
+            for k, param in named_parameters:
+                if param.requires_grad:
+                    key = k.replace(".", "-")
+                    init_lr_group = torch.ones(
+                        self.num_inner_iter + 1) * self.init_lr
+                    self.names_lr_dict[key] = nn.Parameter(
+                        data=init_lr_group,
+                        requires_grad=True
+                    )
 
     def step(self, optimizer, named_parameters, step_num):
         # if self.alfa:

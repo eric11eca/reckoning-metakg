@@ -1,8 +1,6 @@
 #!/bin/bash
 
-# DATASET="proofwriter_cwa_d0"
-# DATASET_TYPE="proofwriter"
-DATASET="clutrr_4_hop"
+DATASET="clutrr_6_hop"
 DATASET_TYPE="clutrr"
 INPUT_FORMAT="lm"
 MODEL_TYPE="gpt2"
@@ -11,16 +9,19 @@ TRAIN_BATCH_SIZE=2
 PREDICT_BATCH_SIZE=1
 INNER_MODE="open"
 GD_ACCUMULATE_STPES=1
-INNER_STEPS=6
+INNER_STEPS=4
 INNER_OPT="adam"
 #POSTFIX="no-facts"
 #POSTFIX="baseline"
-POSTFIX="adam-4-step-t2"
+POSTFIX="adam-4-step-multi"
 CHEKPOINT="./output/model.ckpt"
 
 echo "Downloading data..."
 mkdir -p data/${DATASET}
 wandb artifact get causal_scaffold/data_uploader/${DATASET}:latest --root data/${DATASET}
+
+# echo "Downloading model..."
+# wandb artifact get causal_scaffold/meta_knowledge/proof_2_hop_multi_best:best_k --root ./output/
 
 python cli_maml.py \
     --do_train \
@@ -39,7 +40,8 @@ python cli_maml.py \
     --n_inner_iter ${INNER_STEPS} \
     --callback_monitor val_acc \
     --wandb_checkpoint \
-    --device_idx 0
+    --device_idx 0 \
+    --multi_task
     # --load_checkpoint ${CHEKPOINT}
     # --align
     # --baseline

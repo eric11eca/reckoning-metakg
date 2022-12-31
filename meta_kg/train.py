@@ -97,8 +97,8 @@ def setup_trainer(args) -> pl.Trainer:
         callbacks=callbacks,
         num_sanity_val_steps=4,
         log_every_n_steps=5,
-        val_check_interval=0.15,
-        strategy="deepspeed_stage_2_offload"
+        val_check_interval=0.2,
+        # strategy="deepspeed_stage_2_offload"
         # auto_lr_find=args.auto_lr_find,
         # amp_level=args.opt_level,
         # amp_backend=args.amp_backend,
