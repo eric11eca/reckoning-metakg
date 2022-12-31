@@ -112,7 +112,7 @@ class ClutrrDataReader():
             answer = qa_item[2]
             fact_enum = [f"fact_{i}" for i in range(len(story))]
             prefix = f"Based on {' '.join(fact_enum)}"
-            qa_pairs.append((f"{prefix}, {question}", output, answer))
+            qa_pairs.append([f"{prefix}, {question}", output, answer])
 
         facts = []
         for item in qa_pairs:
@@ -125,13 +125,14 @@ class ClutrrDataReader():
             elif args.baseline:
                 facts.append([fact for fact in story])
             else:
-                fact_in = []
+                fact_in, recalls = [], []
                 for i, fact_pair in enumerate(story):
                     fact = f"{fact_pair[0]} {fact_pair[1]}"
                     fact_in.append(f"fact_{i}: {fact}")
+                    recalls.append(fact)
 
                 if args.multi_task:
-                    item[2] = f"{item[2]} because {','.join(story)}"
+                    item[2] = f"{item[2]} because {','.join(recalls)}"
                 facts.append(fact_in)
 
         return [{"guid": guid, "qa_pairs": [qa_pairs[i]], "facts": facts[i]} for i in range(len(qa_pairs))]
@@ -468,7 +469,7 @@ class MetaDataLoader():
                 dev_input_ids_batch.append(input_ids)
                 dev_attention_mask_batch.append(attention_mask)
                 dev_token_type_ids_batch.append(token_type_ids)
-                
+
                 labels_batch.append(input_ids)
 
             feature = {
