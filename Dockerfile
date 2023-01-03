@@ -48,6 +48,7 @@ RUN cd higher && pip3 install .
 # Copy code
 RUN mkdir -p /nlp
 RUN mkdir -p /nlp/output/
+RUN mkdir -p /nlp/tensor/
 COPY meta_kg/ /nlp/meta_kg/
 COPY run_maml.py /nlp/
 COPY cli_maml.py /nlp/
