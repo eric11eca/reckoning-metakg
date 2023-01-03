@@ -391,8 +391,8 @@ class MetaKnowledgeRunner(pl.LightningModule):
         """
         if len(outputs) == 0:
             metrics = {
-                "acc": 0.5,
-                "f1": 0.5
+                "acc": 0.24,
+                "f1": 0.56
             }
             for metric_name, metric_value in metrics.items():
                 self.log(
