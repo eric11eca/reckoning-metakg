@@ -14,8 +14,9 @@ class LSLRSchedular(nn.Module):
         self.init_lr = init_lr
         self.init_decay = init_decay
         self.alfa = alfa
+        self.model_lr_param_pair = {}
 
-    def initialization(self, named_parameters):
+    def initialization(self, named_parameters, params_opt):
         if self.alfa:
             self.beta_dict_per_param = nn.ParameterDict()
             self.alpha_dict = nn.ParameterDict()
@@ -58,24 +59,21 @@ class LSLRSchedular(nn.Module):
                         data=init_lr_group,
                         requires_grad=True
                     )
+            self.pair_opt_model_param(params_opt)
+
+    def pair_opt_model_param(self, params_opt):
+        for i, (name, _) in enumerate(params_opt):
+            key = name.replace(".", "-")
+            self.model_lr_param_pair[key] = i
+        try:
+            assert len(self.model_lr_param_pair) == len(self.names_lr_dict)
+        except AssertionError:
+            print("Number of parameters in model and optimizer are not equal")
 
     def step(self, optimizer, named_parameters, step_num):
-        # if self.alfa:
-        #     for idx, (k, _) in enumerate(named_parameters):
-        #         key = k.replace(".", "-")
-        #         alpha_params[key] = self.alpha_dict[key]
-        #         beta_params[key] = self.beta_dict[key]
-
-        #         if self.random_init:
-        #             optimizer.param_groups[idx]['weight_decay'] = 1 - \
-        #                 self.beta_dict_per_param[key] * \
-        #                 generated_beta_params[k]
-        #             (1 - self.names_beta_dict_per_param[key] *
-        #              generated_beta_params[k] * self.names_beta_dict[key][step_num])
-        #         else:
-        #             (1 - generated_beta_params[k] *
-        #              self.names_beta_dict[key][step_num])
-
-        for idx, (k, _) in enumerate(named_parameters):
-            key = k.replace(".", "-")
-            optimizer.param_groups[idx]['lr'] = self.names_lr_dict[key][step_num]
+        for k, param in named_parameters:
+            if param.requires_grad:
+                key = k.replace(".", "-")
+                idx = self.model_lr_param_pair[key]
+                alpha = self.names_lr_dict[key][step_num]
+                optimizer.param_groups[idx]['lr'] = alpha

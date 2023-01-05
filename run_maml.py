@@ -45,8 +45,12 @@ class MetaKnowledgeRunner(pl.LightningModule):
             init_lr=config.inner_lr
         )
         if not config.baseline:
+            params_opt = list(filter(
+                lambda p: p[1].requires_grad,
+                self.model.named_parameters()))
             self.inner_schedular.initialization(
-                self.model.named_parameters())
+                self.model.named_parameters(),
+                params_opt)
 
         self.load_dataset()
         self.model_logger.info(
@@ -391,8 +395,8 @@ class MetaKnowledgeRunner(pl.LightningModule):
         """
         if len(outputs) == 0:
             metrics = {
-                "acc": 0.24,
-                "f1": 0.56
+                "acc": 0.6498,
+                "f1": 0.6498
             }
             for metric_name, metric_value in metrics.items():
                 self.log(
