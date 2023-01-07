@@ -237,10 +237,10 @@ class PretrainedEncoderDecoder(nn.Module):
                 outputs.append(instance)
             write_json(outputs, out_file)
 
-            if is_test:
-                artifact = wandb.Artifact(f"test_eval_out", type='dataset')
-                artifact.add_file(out_file)
-                wandb.run.log_artifact(artifact)
+            exp_name = self.global_config.wandb_name
+            artifact = wandb.Artifact(f"{exp_name}-eval_out", type='dataset')
+            artifact.add_file(out_file)
+            wandb.run.log_artifact(artifact)
 
         if metric_file:
             out_dir = Path(metric_file).parent
@@ -362,6 +362,20 @@ class TranslationOutput:
             metrics["acc"] = sum(em_scores) / len(targets)
             metrics["f1"] = sum(f1_scores) / len(targets)
 
+            if "because" in targets[0]:
+                labels = [t.split('because')[0].strip() for t in targets]
+                gen_labels = [p.split('because')[0].strip() for p in preds]
+                em_label = [self.compute_exact_match(
+                    gen, label) for label, gen in zip(labels, gen_labels)]
+
+                facts = [t.split('because')[1].strip() for t in targets]
+                gen_kgs = [p.split('because')[1].strip() for p in preds]
+                em_kg = [self.compute_exact_match(
+                    gen, label) for label, gen in zip(facts, gen_kgs)]
+
+                metrics["acc_label"] = sum(em_label) / len(targets)
+                metrics["acc_kg"] = sum(em_kg) / len(targets)
+
         return metrics
 
     def normalize_text(self, text):
@@ -383,7 +397,7 @@ class TranslationOutput:
         return white_space_fix(remove_articles(remove_punc(lower(text))))
 
     def compute_exact_match(self, prediction, truth):
-        return int(self.normalize_text(truth) in self.normalize_text(prediction))
+        return int(self.normalize_text(truth) == self.normalize_text(prediction))
 
     def compute_f1(self, prediction, truth):
         pred_tokens = self.normalize_text(prediction).split()
