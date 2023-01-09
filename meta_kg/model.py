@@ -364,14 +364,11 @@ class TranslationOutput:
 
             if "because" in targets[0]:
                 labels = [t.split('because')[0].strip() for t in targets]
-                gen_labels = [p.split('because')[0].strip() for p in preds]
-                em_label = [self.compute_exact_match(
-                    gen, label) for label, gen in zip(labels, gen_labels)]
+                em_label = [int(label in gen)
+                            for label, gen in zip(labels, preds)]
 
                 facts = [t.split('because')[1].strip() for t in targets]
-                gen_kgs = [p.split('because')[1].strip() for p in preds]
-                em_kg = [self.compute_exact_match(
-                    gen, label) for label, gen in zip(facts, gen_kgs)]
+                em_kg = [int(kg in gen) for kg, gen in zip(facts, preds)]
 
                 metrics["acc_label"] = sum(em_label) / len(targets)
                 metrics["acc_kg"] = sum(em_kg) / len(targets)
