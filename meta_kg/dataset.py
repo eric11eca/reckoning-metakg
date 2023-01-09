@@ -247,6 +247,9 @@ class MetaKnowledgeDataset(object):
         if not self.is_training and args.max_data > 0:
             self.data = random.choices(self.data, k=args.max_data)
 
+        if self.is_training and args.do_eval:
+            self.data = self.data[:1]
+
     def __len__(self):
         return len(self.data)
 

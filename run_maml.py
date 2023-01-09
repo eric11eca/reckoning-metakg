@@ -5,6 +5,7 @@ import pytorch_lightning as pl
 
 from typing import Dict
 from torch.optim import AdamW
+from torch.utils.data import DataLoader
 from transformers import get_linear_schedule_with_warmup
 
 from meta_kg.dataset import MetaKnowledgeDataset
@@ -122,39 +123,21 @@ class MetaKnowledgeRunner(pl.LightningModule):
 
         return output_dict
 
-    def inner_loop_step(self, features, print_out, fmodel, diffopt) -> Dict:
-        """Runs a single inner loop step
+    def _batch_split(self, row):
+        inner_loader = DataLoader(
+            row, batch_size=4, shuffle=False)
+        splited = [inner_batch for inner_batch in inner_loader]
+        return splited
 
-        :param features: the target batch
-        :param print_out: None in this step
-        :param fmodel: the fast model
-        :param diffopt: the optimizer
-        :rtype: dict
-        :returns: dictionary that includes loss
-        """
-        for iter in range(self.hparams.n_inner_iter):
-            train_out = fmodel(features, print_out, is_inner=True)
-            train_loss = train_out["loss"]
-            if not train_loss.requires_grad:
-                train_loss.requires_grad = True
-            self.inner_schedular.step(
-                diffopt, self.model.named_parameters(), iter)
-            diffopt.step(train_loss)
-
-    def inner_loop_end(self, features, print_out, fmodel, is_train: bool) -> Dict:
-        """Runs a single inner loop step
-
-        :param features: the target batch
-        :param print_out: None in this step
-        :param fmodel: the fast model
-        :param is_train: whether to run training or validation
-        :rtype: dict
-        :returns: dictionary that includes loss
-        """
-        with torch.no_grad():
-            train_pred = fmodel(
-                features, print_out, is_inner=True)
-            return train_pred
+    def _batch_aggregate(self, rb):
+        inputs, masks, types = rb[0], rb[1], rb[2]
+        train_feature = {
+            "input_ids": inputs,
+            "attention_mask": masks,
+            "token_type_ids": types,
+            "evaluate": False
+        }
+        return train_feature
 
     def get_features(self, batch, is_train: bool):
         """Get features from batch"""
@@ -187,15 +170,80 @@ class MetaKnowledgeRunner(pl.LightningModule):
             dev_features["labels"] = batch["labels"].to(
                 torch.device(self.hparams.device))
 
+        if self.hparams.inner_grad_accumulate:
+            data_keys = ["train_input_ids",
+                         "train_attention_mask", "train_token_type_ids"]
+            rebatch = [self._batch_split(batch[key]) for key in data_keys]
+            train_features = [
+                self._batch_aggregate(rb) for rb in zip(*rebatch)]
+
         return train_features, dev_features, print_out
 
-    def step(self, batch, is_train: bool) -> Dict:
-        """Runs a single meta-training step
+    def inner_loop_step(self, features, print_out, fmodel, diffopt) -> Dict:
+        """Runs a single inner loop step
 
-        :param batch: the target batch
+        :param features: the target batch
+        :param print_out: None in this step
+        :param fmodel: the fast model
+        :param diffopt: the optimizer
+        :rtype: dict
+        :returns: dictionary that includes loss
+        """
+        # if not isinstance(features, list):
+        #     features = [features]
+        # for iter in range(self.hparams.n_inner_iter):
+        #     loss = torch.tensor(0., device=self.device)
+        #     for batch in features:
+        #         train_out = fmodel(batch, print_out, is_inner=True)
+        #         train_loss = train_out["loss"]
+        #         if not train_loss.requires_grad:
+        #             train_loss.requires_grad = True
+        #         loss += train_loss
+        #     loss = loss / len(features)
+        #     self.inner_schedular.step(
+        #         diffopt, self.model.named_parameters(), iter)
+        #     diffopt.step(loss)
+
+        for iter in range(self.hparams.n_inner_iter):
+            train_out = fmodel(features, print_out, is_inner=True)
+            train_loss = train_out["loss"]
+            if not train_loss.requires_grad:
+                train_loss.requires_grad = True
+            self.inner_schedular.step(
+                diffopt, self.model.named_parameters(), iter)
+            diffopt.step(train_loss)
+
+    def inner_loop_end(self, features, print_out, fmodel, is_train: bool) -> Dict:
+        """Runs a single inner loop step
+
+        :param features: the target batch
+        :param print_out: None in this step
+        :param fmodel: the fast model
         :param is_train: whether to run training or validation
         :rtype: dict
         :returns: dictionary that includes loss
+        """
+        # if not isinstance(features, list):
+        #     features = [features]
+        # with torch.no_grad():
+        #     loss = torch.tensor(0., device=self.device)
+        #     for batch in features:
+        #         train_pred = fmodel(
+        #             batch, print_out, is_inner=True)
+        #         loss += train_pred["loss"]
+        #     return {"loss": loss / len(features)}
+
+        with torch.no_grad():
+            train_pred = fmodel(
+                features, print_out, is_inner=True)
+            return train_pred
+
+    def config_inner_optimizer(self):
+        """Configures the inner loop optimizer
+
+        :param model_params: the model parameters
+        :rtype: torch.optim
+        :returns: the optimizer
         """
         model_params = []
         for _, param in self.model.named_parameters():
@@ -213,7 +261,17 @@ class MetaKnowledgeRunner(pl.LightningModule):
                 model_params,
                 momentum=0.9,
             )
+        return inner_opt
 
+    def step(self, batch, is_train: bool) -> Dict:
+        """Runs a single meta-training step
+
+        :param batch: the target batch
+        :param is_train: whether to run training or validation
+        :rtype: dict
+        :returns: dictionary that includes loss
+        """
+        inner_opt = self.config_inner_optimizer()
         loss = torch.tensor(0., device=self.device)
         outer_loss = torch.tensor(0., device='cpu')
         inner_loss = torch.tensor(0., device='cpu')
@@ -227,7 +285,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
             with higher.innerloop_ctx(
                 self.model, inner_opt,
                 copy_initial_weights=False,
-                track_higher_grads=True
+                track_higher_grads=is_train
             ) as (fmodel, diffopt):
                 inner_track = {}
                 for _, param in fmodel.named_parameters():
@@ -605,7 +663,6 @@ class MetaKnowledgeRunner(pl.LightningModule):
 
 def run(args):
     util_logger.info('Setting up configuration for model runner...')
-
     setup_wandb(args)
     model = MetaKnowledgeRunner(args)
     trainer = setup_trainer(args)
@@ -617,7 +674,9 @@ def run(args):
             trainer.fit(model)
 
     if args.do_eval:
-        if args.load_checkpoint is not None:
-            trainer.test(model, ckpt_path=args.load_checkpoint)
-        else:
-            trainer.test(model)
+        try:
+            assert args.load_checkpoint is not None
+        except AssertionError:
+            util_logger.error('Checkpoint path is not provided for evaluation')
+        trainer.fit(model, ckpt_path=args.load_checkpoint)
+

@@ -51,6 +51,10 @@ def main():
                         help="Multi-task learning inner and outer tasks.")
     parser.add_argument("--multi_objective", action='store_true', default=False,
                         help="Multi-task learning inner and outer objective.")
+    parser.add_argument("--inner_grad_accumulate", action='store_true', default=False,
+                        help="Enable inner loop gradient accumulation.")
+    parser.add_argument("--inner_accumulate_steps", default=4, type=int,
+                        help="Number of inner loop gradient accumulation steps.")
 
     # Preprocessing/decoding-related parameters
     parser.add_argument("--max_seq_length", default=64, type=int)
