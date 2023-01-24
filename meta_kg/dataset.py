@@ -76,11 +76,14 @@ class ProofWriterDataReader():
         :param config: the configuration
         """
         total_data = read_jsonl(path)
+        all_facts = [fact for data in total_data for fact in data['facts']]
 
         total_qa_data = []
         for instance in total_data:
             qa_data = cls._read(instance, config)
-
+            if config.random_facts:
+                num_facts = len(qa_data[0]['facts'])
+                qa_data[0]['facts'] = random.choices(all_facts, k=num_facts)
             total_qa_data += qa_data
 
         for data in total_qa_data[:2]:
@@ -101,7 +104,7 @@ class ClutrrDataReader():
         :rtype instance: situation_modeling.readers.input_example.InputBase
         """
         questions = instance["questions"]
-        proofs = instance["proofs"]
+        # proofs = instance["proofs"]
         story = instance["facts"]
         guid = instance["guid"]
 
@@ -112,7 +115,10 @@ class ClutrrDataReader():
             answer = qa_item[2]
             fact_enum = [f"fact_{i}" for i in range(len(story))]
             prefix = f"Based on {' '.join(fact_enum)}"
-            qa_pairs.append([f"{prefix}, {question}", output, answer])
+            if args.baseline:
+                qa_pairs.append([question, output, answer])
+            else:
+                qa_pairs.append([f"{prefix}, {question}", output, answer])
 
         facts = []
         for item in qa_pairs:
@@ -124,16 +130,18 @@ class ClutrrDataReader():
                     [f"{prefix} fact_{i}: {fact}" for i, fact in enumerate(story)])
             elif args.baseline:
                 facts.append([fact for fact in story])
+                if args.multi_task:
+                    recalls = [f"{fact[0]} {fact[1]}" for fact in story]
+                    item[2] = f"{item[2]} because {','.join(recalls)}"
             else:
                 fact_in, recalls = [], []
                 for i, fact_pair in enumerate(story):
                     fact = f"{fact_pair[0]} {fact_pair[1]}"
                     fact_in.append(f"fact_{i}: {fact}")
                     recalls.append(fact)
-
+                facts.append(fact_in)
                 if args.multi_task:
                     item[2] = f"{item[2]} because {','.join(recalls)}"
-                facts.append(fact_in)
 
         return [{"guid": guid, "qa_pairs": [qa_pairs[i]], "facts": facts[i]} for i in range(len(qa_pairs))]
 
@@ -147,13 +155,15 @@ class ClutrrDataReader():
         :param config: the configuration
         """
         total_data = read_jsonl(path)
+        all_facts = [fact for data in total_data for fact in data['facts']]
 
         total_qa_data = []
         for instance in total_data:
             qa_data = cls._read(instance, config)
-
+            if config.random_facts:
+                num_facts = len(qa_data[0]['facts'])
+                qa_data[0]['facts'] = random.choices(all_facts, k=num_facts)
             total_qa_data += qa_data
-
         for data in total_qa_data[:2]:
             pprint(data)
 

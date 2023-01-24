@@ -432,6 +432,13 @@ class MetaKnowledgeRunner(pl.LightningModule):
             output_dict = self.base_step(batch, is_train=False)
             assert len(output_dict["print_out"]["gen_out"]) == len(
                 output_dict["print_out"]["answer"])
+            self.log(
+                f'val_batch_loss',
+                output_dict["loss"],
+                on_step=True,
+                on_epoch=False,
+                prog_bar=False
+            )
         else:
             torch.set_grad_enabled(True)
             self.model.train()
@@ -465,7 +472,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
                 )
             return
         if self.baseline:
-            val_loss = torch.stack([x["train_loss"] for x in outputs]).mean()
+            val_loss = torch.stack([x["loss"] for x in outputs]).mean()
         else:
             val_loss = torch.stack([x["outer_loss"] for x in outputs]).mean()
         self.log("val_loss", val_loss, on_epoch=True, prog_bar=True)
@@ -501,7 +508,10 @@ class MetaKnowledgeRunner(pl.LightningModule):
         return test_out
 
     def test_epoch_end(self, outputs):
-        test_loss = torch.stack([x["outer_loss"] for x in outputs]).mean()
+        if self.hparams.baseline:
+            test_loss = torch.stack([x["loss"] for x in outputs]).mean()
+        else:
+            test_loss = torch.stack([x["outer_loss"] for x in outputs]).mean()
         self.log("test_loss", test_loss, on_epoch=True, prog_bar=True)
 
         print_out_flatten = []
@@ -616,15 +626,15 @@ class MetaKnowledgeRunner(pl.LightningModule):
             data_type="dev",
             is_training=False
         )
-        self.test_data = self.dev_data
-        # self.test_data = MetaKnowledgeDataset(
-        #     self.model_logger,
-        #     self.hparams,
-        #     self.tokenizer,
-        #     self.hparams.train_dir,
-        #     data_type="test",
-        #     is_training=False
-        # )
+        #self.test_data = self.dev_data
+        self.test_data = MetaKnowledgeDataset(
+            self.model_logger,
+            self.hparams,
+            self.tokenizer,
+            self.hparams.train_dir,
+            data_type="test",
+            is_training=False
+        )
         self.model_logger.info('Dataset loaded')
 
     def train_dataloader(self):
@@ -678,5 +688,7 @@ def run(args):
             assert args.load_checkpoint is not None
         except AssertionError:
             util_logger.error('Checkpoint path is not provided for evaluation')
-        trainer.fit(model, ckpt_path=args.load_checkpoint)
-
+        if args.baseline:
+            trainer.validate(model, ckpt_path=args.load_checkpoint)
+        else:
+            trainer.fit(model, ckpt_path=args.load_checkpoint)

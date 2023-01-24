@@ -55,7 +55,7 @@ COPY cli_maml.py /nlp/
 COPY run_gpt2.sh /nlp/
 COPY upload_wandb_data.sh /nlp/
 
-ENV WANDB_API_KEY 5d22b1d85f1fd5bb0c5758b93903c364ee5dc93d
+ENV WANDB_API_KEY 9edee5b624841e10c88fcf161d8dc54d4efbee29
 
 ENTRYPOINT []
 CMD ["/bin/bash"]
