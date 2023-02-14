@@ -98,7 +98,7 @@ class ProofWriterDataReader(DataReader):
                 facts.append(
                     [f"{prefix} fact_{i}: {fact}" for i, fact in enumerate(context)])
             elif args.baseline:
-                facts.append([fact for fact in context])
+                facts.append(context)
             else:
                 fact_in = []
                 for i, fact in enumerate(context):
@@ -404,8 +404,13 @@ class MetaDataLoader():
         eos = self.tokenizer.eos_token
         bos = self.tokenizer.bos_token
 
-        facts_batch = ["\n".join([f"{fact[0]} {fact[1]}" for fact in data['facts']])
-                       for data in batch]
+        if isinstance(batch[0]["facts"], tuple):
+            facts_batch = [
+                "\n".join([f"{fact[0]} {fact[1]}" for fact in data['facts']]) for data in batch]
+        else:
+            facts_batch = [
+                "\n".join([fact for fact in data['facts']]) for data in batch]
+
         questions = [f"{data['qa_pairs'][0][0]}" for data in batch]
         if len(batch[0]['qa_pairs'][0]) > 2:
             answers = [data['qa_pairs'][0][2] for data in batch]
@@ -439,16 +444,7 @@ class MetaDataLoader():
             attention_mask_batch.append(attention_mask)
             token_type_ids_batch.append(token_type_ids)
 
-        if self.args.classifier:
-            labels = torch.LongTensor([self.label_to_id[x] for x in answers])
-            labels = torch.nn.functional.one_hot(
-                labels,
-                num_classes=self.num_classes
-            ).to(torch.float)
-        else:
-            labels = torch.cat(input_ids_batch, dim=0)
-
-        print_inputs = [f"{txt_in}" for (txt_in, _) in inputs]
+        print_inputs = [txt_in for (txt_in, _) in inputs]
         if len(batch[0]['qa_pairs'][0]) > 2:
             print_outputs = [data['qa_pairs'][0][2] for data in batch]
         else:
@@ -464,7 +460,7 @@ class MetaDataLoader():
             "input_ids": torch.cat(input_ids_batch, dim=0),
             "attention_mask": torch.cat(attention_mask_batch, dim=0),
             "token_type_ids": torch.cat(token_type_ids_batch, dim=0),
-            "labels": labels,
+            "labels": torch.cat(input_ids_batch, dim=0),
             "print_out": print_out,
             "evaluate": self.evaluate
         }
