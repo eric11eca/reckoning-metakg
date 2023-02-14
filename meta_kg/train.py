@@ -70,22 +70,6 @@ def setup_trainer(args) -> pl.Trainer:
         progress_bar,
     ]
 
-    # artifact callback
-    # if config.wandb_project and (config.save_wandb_results or config.save_wandb_model):
-
-    #     if not config.wandb_name:
-    #         raise ValueError(
-    #             'TO back up artifacts, must provide name via `--wandb_name`'
-    #         )
-
-    #     artifact_callback = WandbArtifactCallback(
-    #         config.output_dir,
-    #         config.wandb_name,
-    #         config.save_wandb_results,
-    #         config.save_wandb_model,
-    #     )
-    #     callbacks.append(artifact_callback)
-
     # train parameters
     train_params = dict(
         accelerator='gpu',
@@ -97,22 +81,14 @@ def setup_trainer(args) -> pl.Trainer:
         callbacks=callbacks,
         num_sanity_val_steps=4,
         log_every_n_steps=5,
-        val_check_interval=0.2,
-        # strategy="deepspeed_stage_2_offload"
+        val_check_interval=0.5,
+        # strategy="deepspeed_stage_2_offload",
         # auto_lr_find=args.auto_lr_find,
-        # amp_level=args.opt_level,
-        # amp_backend=args.amp_backend,
     )
 
     if args.wandb_project:
         train_params['logger'] = init_wandb_logger(args)
         train_params['logger'].log_hyperparams(vars(args))
-
-    # if config.train_strategy != "none" and config.train_strategy in STRATEGY:
-    #     train_params["strategy"] = config.train_strategy
-    #     #train_params["plugins"] = STRATEGY[config.train_strategy]
-    #     util_logger.info(f'training with accelator={config.train_strategy}')
-    #     # accelerator="ddp",
 
     util_logger.info(
         "\n===========\n"+pformat(train_params)+"\n==========="

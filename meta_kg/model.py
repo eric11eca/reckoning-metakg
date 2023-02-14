@@ -17,6 +17,7 @@ from transformers import (
     AutoModelForSeq2SeqLM,
     GPT2LMHeadModel,
     AutoModelForCausalLM,
+    GenerationConfig
 )
 
 from meta_kg.utils.py_io import write_json
@@ -150,16 +151,18 @@ class PretrainedEncoderDecoder(nn.Module):
         outputs = []
         for input_ids in input_ids_batch:
             max_length = input_ids.size(1) + max_out_length
-            greedy_output = self.model.generate(
-                input_ids=input_ids,
-                max_length=max_length,
+            generation_config = GenerationConfig.from_pretrained(
+                "gpt2",
                 num_beams=5,
                 early_stopping=True,
                 top_p=None,
                 top_k=5,
                 do_sample=False,
-                num_return_sequences=1,
-                use_cache=True)
+                num_return_sequences=1
+            )
+            self.model.generation_config = generation_config
+            greedy_output = self.model.generate(
+                input_ids=input_ids, max_length=max_length)
             out = self.tokenizer.decode(
                 greedy_output[0],
                 skip_special_tokens=True)
