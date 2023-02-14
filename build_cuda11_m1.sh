@@ -1,8 +1,8 @@
-NUM=8
+NUM=12
 
 CURRENT=${NUM}
 IMAGE_NAME=meta_kg
-DOCKERFILE_NAME=DockerfileV2
+DOCKERFILE_NAME=docker/update_train/Dockerfile
 
 GIT_HASH=`git log --format="%h" -n 1`
 IMAGE=$IMAGE_NAME_$USER-$GIT_HASH
@@ -12,9 +12,6 @@ echo "Building $IM_NAME"
 docker buildx build --build-arg DUMMY='cloud' --platform linux/amd64 --load -f $DOCKERFILE_NAME -t $IM_NAME --cache-from type=local,src=../../.docker_cache --cache-to type=local,mode=max,dest=../../.docker_cache .
 
 echo "Pushing $IM_NAME to Harbor"
-# docker tag $IM_NAME ic-registry.epfl.ch/nlp/zechen/$IM_NAME
-# docker push ic-registry.epfl.ch/nlp/zechen/$IM_NAME
-
 docker tag $IM_NAME eric11eca/$IM_NAME
 docker push eric11eca/$IM_NAME
 
