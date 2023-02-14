@@ -21,8 +21,8 @@ def kg_as_autoregressive(triples, rules, baseline=False):
     return facts
 
 
-class ProofWriterDataReader():
-    """Custom dataset loader for QA problems with associated knowledge facts."""
+class DataReader:
+    """Custom dataset loader for QA problems."""
 
     @staticmethod
     def _read(instance, args):
@@ -32,39 +32,7 @@ class ProofWriterDataReader():
         :param args: the configuration arguments
         :rtype instance: situation_modeling.readers.input_example.InputBase
         """
-        answer_map = {
-            "true": "yes",
-            "false": "no",
-        }
-        guid = instance["guid"]
-        question = instance["question"]
-        context = instance["facts"]
-        answer = answer_map[instance["answer"]]
-
-        fact_enum = [f"fact_{i}" for i in range(len(context))]
-        prefix = f"Based on {' '.join(fact_enum)}"
-        example = [f"{prefix}, Can we conclude {question}?", answer]
-        qa_pairs = [example]
-
-        facts = []
-        for item in qa_pairs:
-            question = item[0]
-            question = question.replace("?", "")
-            if args.inner_mode == "closed":
-                prefix = f"To determine {question}, we need to know"
-                facts.append(
-                    [f"{prefix} fact_{i}: {fact}" for i, fact in enumerate(context)])
-            elif args.baseline:
-                facts.append([fact for fact in context])
-            else:
-                fact_in = []
-                for i, fact in enumerate(context):
-                    fact_in.append(f"fact_{i}: {fact}")
-                facts.append(fact_in)
-                if args.multi_task:
-                    item[1] = f"{item[1]} because {','.join(context)}"
-
-        return [{"guid": guid, "qa_pairs": [qa_pairs[i]], "facts": facts[i]} for i in range(len(qa_pairs))]
+        NotImplemented
 
     @classmethod
     def jsonl_file_reader(cls, path, config):
@@ -92,7 +60,58 @@ class ProofWriterDataReader():
         return total_qa_data
 
 
-class ClutrrDataReader():
+class ProofWriterDataReader(DataReader):
+    """Custom dataset loader for QA problems with associated knowledge facts."""
+
+    @staticmethod
+    def _read(instance, args):
+        """Reads a single json line from the target file. Modify here when the json schema changes
+
+        :param instance: the instance to be read
+        :param args: the configuration arguments
+        :rtype instance: situation_modeling.readers.input_example.InputBase
+        """
+        answer_map = {
+            "true": "yes",
+            "false": "no",
+            "unknown": "none"
+        }
+        guid = instance["guid"]
+        question = instance["question"]
+        if "all_facts" in instance:
+            context = instance["all_facts"]
+        else:
+            context = instance["facts"]
+        answer = answer_map[instance["answer"]]
+
+        fact_enum = [f"fact_{i}" for i in range(len(context))]
+        prefix = f"Based on {' '.join(fact_enum)}"
+        example = [f"{prefix}, Can we conclude {question}?", answer]
+        qa_pairs = [example]
+
+        facts = []
+        for item in qa_pairs:
+            question = item[0]
+            question = question.replace("?", "")
+            if args.inner_mode == "closed":
+                prefix = f"To determine {question}, we need to know"
+                facts.append(
+                    [f"{prefix} fact_{i}: {fact}" for i, fact in enumerate(context)])
+            elif args.baseline:
+                facts.append([fact for fact in context])
+            else:
+                fact_in = []
+                for i, fact in enumerate(context):
+                    fact_in.append(f"fact_{i}: {fact}")
+                facts.append(fact_in)
+                if args.multi_task:
+                    evidence = instance["facts"]
+                    item[1] = f"{item[1]} because {','.join(evidence)}"
+
+        return [{"guid": guid, "qa_pairs": [qa_pairs[i]], "facts": facts[i]} for i in range(len(qa_pairs))]
+
+
+class ClutrrDataReader(DataReader):
     """Custom dataset loader for QA problems with associated knowledge facts."""
 
     @staticmethod
@@ -145,29 +164,52 @@ class ClutrrDataReader():
 
         return [{"guid": guid, "qa_pairs": [qa_pairs[i]], "facts": facts[i]} for i in range(len(qa_pairs))]
 
-    @classmethod
-    def jsonl_file_reader(cls, path, config):
-        """The method responsible for parsing in the input file. Implemented here
-        to make the overall pipeline more transparent.
 
-        :param path: the path to the target data file
-        :param evaluation: indicator as to where this is an evaluation file (based on name)
-        :param config: the configuration
+class FolioDataReader(DataReader):
+    """Custom dataset loader for QA problems with associated knowledge facts."""
+    @staticmethod
+    def _read(instance, args):
+        """Reads a single json line from the target file. Modify here when the json schema changes
+
+        :param instance: the instance to be read
+        :param args: the configuration arguments
+        :rtype instance: situation_modeling.readers.input_example.InputBase
         """
-        total_data = read_jsonl(path)
-        all_facts = [fact for data in total_data for fact in data['facts']]
+        answer_map = {
+            "true": "yes",
+            "false": "no",
+            "unknown": "unknown",
+            "uncertain": "unknown",
+        }
+        guid = instance["guid"]
+        question = instance["question"]
+        context = instance["facts"]
+        answer = answer_map[instance["answer"]]
 
-        total_qa_data = []
-        for instance in total_data:
-            qa_data = cls._read(instance, config)
-            if config.random_facts:
-                num_facts = len(qa_data[0]['facts'])
-                qa_data[0]['facts'] = random.choices(all_facts, k=num_facts)
-            total_qa_data += qa_data
-        for data in total_qa_data[:2]:
-            pprint(data)
+        fact_enum = [f"fact_{i}" for i in range(len(context))]
+        prefix = f"Based on {' '.join(fact_enum)}"
+        example = [f"{prefix}, Can we conclude {question}?", answer]
+        qa_pairs = [example]
 
-        return total_qa_data
+        facts = []
+        for item in qa_pairs:
+            question = item[0]
+            question = question.replace("?", "")
+            if args.inner_mode == "closed":
+                prefix = f"To determine {question}, we need to know"
+                facts.append(
+                    [f"{prefix} fact_{i}: {fact}" for i, fact in enumerate(context)])
+            elif args.baseline:
+                facts.append([fact for fact in context])
+            else:
+                fact_in = []
+                for i, fact in enumerate(context):
+                    fact_in.append(f"fact_{i}: {fact}")
+                facts.append(fact_in)
+                if args.multi_task:
+                    item[1] = f"{item[1]} because {','.join(context)}"
+
+        return [{"guid": guid, "qa_pairs": [qa_pairs[i]], "facts": facts[i]} for i in range(len(qa_pairs))]
 
 
 class EntailmentTreeDataReader():
@@ -244,6 +286,7 @@ class MetaKnowledgeDataset(object):
             "proofwriter": ProofWriterDataReader,
             "clutrr1": ClutrrDataReader,
             "clutrr": ClutrrDataReader,
+            "folio": FolioDataReader,
             "entailment_tree": EntailmentTreeDataReader,
         }
         self.reader = reader_classes[args.dataset_type]
