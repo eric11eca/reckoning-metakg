@@ -1,4 +1,6 @@
+import os
 import torch
+import wandb
 import higher
 import logging
 import pytorch_lightning as pl
@@ -460,8 +462,8 @@ class MetaKnowledgeRunner(pl.LightningModule):
         """
         if len(outputs) == 0:
             metrics = {
-                "acc": 0.6498,
-                "f1": 0.6498
+                "acc": 0.50,
+                "f1": 0.50
             }
             for metric_name, metric_value in metrics.items():
                 self.log(
@@ -471,6 +473,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
                     prog_bar=True
                 )
             return
+
         if self.baseline:
             val_loss = torch.stack([x["loss"] for x in outputs]).mean()
         else:
@@ -514,10 +517,11 @@ class MetaKnowledgeRunner(pl.LightningModule):
             test_loss = torch.stack([x["outer_loss"] for x in outputs]).mean()
         self.log("test_loss", test_loss, on_epoch=True, prog_bar=True)
 
-        print_out_flatten = []
-        for out in outputs:
-            print_out_flatten += out["print_out"]
-        outputs = [{"print_out": item} for item in print_out_flatten]
+        if not self.hparams.baseline:
+            print_out_flatten = []
+            for out in outputs:
+                print_out_flatten += out["print_out"]
+            outputs = [{"print_out": item} for item in print_out_flatten]
 
         out_file_name = f"test_eval_out.json"
         metirc_file_name = f"test_metrics.json"
@@ -626,7 +630,6 @@ class MetaKnowledgeRunner(pl.LightningModule):
             data_type="dev",
             is_training=False
         )
-        #self.test_data = self.dev_data
         self.test_data = MetaKnowledgeDataset(
             self.model_logger,
             self.hparams,
@@ -682,6 +685,14 @@ def run(args):
             trainer.fit(model, ckpt_path=args.load_checkpoint)
         else:
             trainer.fit(model)
+            # util_logger.info('Saving best model to wandb')
+            # best_model_path = trainer.checkpoint_callback.best_model_path
+            # if os.path.isfile(best_model_path):
+            #     artifact = wandb.Artifact(args.wandb_name, type='model')
+            #     artifact.add_file(best_model_path)
+            #     wandb.run.log_artifact(artifact)
+            # else:
+            #     util_logger.error('No best model found')
 
     if args.do_eval:
         try:
@@ -689,6 +700,6 @@ def run(args):
         except AssertionError:
             util_logger.error('Checkpoint path is not provided for evaluation')
         if args.baseline:
-            trainer.validate(model, ckpt_path=args.load_checkpoint)
+            trainer.test(model, ckpt_path=args.load_checkpoint)
         else:
             trainer.fit(model, ckpt_path=args.load_checkpoint)

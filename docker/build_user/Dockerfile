@@ -57,5 +57,5 @@ COPY upload_wandb_data.sh /nlp/
 
 ENV WANDB_API_KEY 9edee5b624841e10c88fcf161d8dc54d4efbee29
 
-ENTRYPOINT []
+# ENTRYPOINT ["./run_gpt2.sh"]
 CMD ["/bin/bash"]

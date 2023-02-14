@@ -1,6 +1,6 @@
 #!/bin/bash
 
-DATASET="clutrr_mix"
+DATASET="clutrr_6_hop"
 DATASET_TYPE="clutrr"
 INPUT_FORMAT="lm"
 MODEL_TYPE="gpt2"
@@ -13,15 +13,15 @@ INNER_STEPS=4
 INNER_OPT="adam"
 #POSTFIX="no-facts"
 #POSTFIX="baseline"
-POSTFIX="multi"
+POSTFIX="distil"
 CHEKPOINT="./output/model.ckpt"
-
+ 
 echo "Downloading data..."
 mkdir -p data/${DATASET}
 wandb artifact get epfl_nlp_phd/data-collection/${DATASET}:latest --root data/${DATASET}
 
 # echo "Downloading model..."
-# wandb artifact get epfl_nlp_phd/meta-knowledge/clutrr-4-multi:v1 --root ./output/
+# wandb artifact get epfl_nlp_phd/meta-knowledge/owa_proof_3_hop_hard-multi:best_k --root ./output/
 
 python cli_maml.py \
     --do_train \
@@ -33,8 +33,9 @@ python cli_maml.py \
     --train_batch_size ${TRAIN_BATCH_SIZE} \
     --predict_batch_size ${PREDICT_BATCH_SIZE} \
     --learning_rate 3e-5 \
+    --num_train_epochs 10 \
     --gradient_accumulation_steps ${GD_ACCUMULATE_STPES} \
-    --wandb_name ${INNER_MODE}-${DATASET}-${POSTFIX} \
+    --wandb_name ${DATASET}-${POSTFIX} \
     --inner_mode ${INNER_MODE} \
     --inner_opt ${INNER_OPT} \
     --n_inner_iter ${INNER_STEPS} \
@@ -43,13 +44,6 @@ python cli_maml.py \
     --device_idx 0 \
     --multi_task \
     # --load_checkpoint ${CHEKPOINT} \
-    # --freeze_partial \
     # --max_data 2000 \
-    # --load_checkpoint ${CHEKPOINT}
-    # --align
-    # --baseline
-    # --no_facts \
-    # --align \
-    # --load_checkpoint ${CHEKPOINT}
     # --freeze_partial
-    # --do_eval
+
