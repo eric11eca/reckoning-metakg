@@ -213,7 +213,11 @@ class MetaKnowledgeRunner(pl.LightningModule):
                 train_loss.requires_grad = True
             self.inner_schedular.step(
                 diffopt, self.model.named_parameters(), iter)
-            diffopt.step(train_loss)
+            if self.hparams.fomaml:
+                diffopt.step(train_loss, grad_callback=lambda grads: [
+                             g.detach() for g in grads])
+            else:
+                diffopt.step(train_loss)
 
     def inner_loop_end(self, features, print_out, fmodel, is_train: bool) -> Dict:
         """Runs a single inner loop step
