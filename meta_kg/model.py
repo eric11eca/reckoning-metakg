@@ -241,7 +241,9 @@ class PretrainedEncoderDecoder(nn.Module):
             write_json(outputs, out_file)
 
             exp_name = self.global_config.wandb_name
-            artifact = wandb.Artifact(f"{exp_name}-eval_out", type='dataset')
+            acc = metrics["acc_label"] if "acc_label" in metrics else metrics["acc"]
+            artifact = wandb.Artifact(
+                f"{exp_name}-eval_out-{acc}", type='dataset')
             artifact.add_file(out_file)
             wandb.run.log_artifact(artifact)
 
@@ -367,16 +369,28 @@ class TranslationOutput:
 
             if "because" in targets[0]:
                 labels = [t.split('because')[0].strip() for t in targets]
-                em_label = [int(label in gen)
-                            for label, gen in zip(labels, preds)]
+                gen_labels = [self.clean_gen_label(pred) for pred in preds]
+                em_label = [self.compute_exact_match(
+                    gen, label) for label, gen in zip(labels, gen_labels)]
 
-                facts = [t.split('because')[1].strip() for t in targets]
+                facts = [t.split('because')[1].strip()
+                         if "because" in t else t for t in targets]
                 em_kg = [int(kg in gen) for kg, gen in zip(facts, preds)]
 
                 metrics["acc_label"] = sum(em_label) / len(targets)
                 metrics["acc_kg"] = sum(em_kg) / len(targets)
 
         return metrics
+
+    def clean_gen_label(self, gen):
+        if "because" in gen:
+            gen = gen.split("because")[0].strip()
+        else:
+            gen = gen.split()[0].strip()
+
+        if "," in gen:
+            gen = gen.split(",")[0].strip()
+        return gen
 
     def normalize_text(self, text):
         """Removing articles and punctuation, and standardizing whitespace are all typical text processing steps."""
