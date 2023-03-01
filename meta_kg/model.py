@@ -386,10 +386,14 @@ class TranslationOutput:
         if "because" in gen:
             gen = gen.split("because")[0].strip()
         else:
-            gen = gen.split()[0].strip()
+            try:
+                gen = gen.split()[0].strip()
+            except:
+                pass
 
         if "," in gen:
             gen = gen.split(",")[0].strip()
+
         return gen
 
     def normalize_text(self, text):

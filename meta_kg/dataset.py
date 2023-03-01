@@ -77,11 +77,11 @@ class ProofWriterDataReader(DataReader):
             "unknown": "none"
         }
         guid = instance["guid"]
-        question = instance["question"]
+        question = instance["question"].replace(".", "")
         if "all_facts" in instance:
-            context = instance["all_facts"]
+            context = [k.replace(".", " ") for k in instance["all_facts"]]
         else:
-            context = instance["facts"]
+            context = [k.replace(".", " ") for k in instance["facts"]]
         answer = answer_map[instance["answer"]]
 
         fact_enum = [f"fact_{i}" for i in range(len(context))]
@@ -105,7 +105,7 @@ class ProofWriterDataReader(DataReader):
                     fact_in.append(f"fact_{i}: {fact}")
                 facts.append(fact_in)
                 if args.multi_task:
-                    evidence = instance["facts"]
+                    evidence = [k.replace(".", "") for k in instance["facts"]]
                     item[1] = f"{item[1]} because {','.join(evidence)}"
 
         return [{"guid": guid, "qa_pairs": [qa_pairs[i]], "facts": facts[i]} for i in range(len(qa_pairs))]
