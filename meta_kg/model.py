@@ -373,12 +373,18 @@ class TranslationOutput:
                 em_label = [self.compute_exact_match(
                     gen, label) for label, gen in zip(labels, gen_labels)]
 
-                facts = [t.split('because')[1].strip()
-                         if "because" in t else t for t in targets]
-                em_kg = [int(kg in gen) for kg, gen in zip(facts, preds)]
+                eval_paris = [self.post_process(gen, target)
+                              for gen, target in zip(preds, targets)]
+                em_kg = [self.recall_score(gen, kg)
+                         for gen, kg, _ in eval_paris]
+                num_gen_kgs = sum([len(gen) for gen, _, _ in eval_paris])
+
+                # facts = [t.split('because')[1].strip()
+                #          if "because" in t else t for t in targets]
+                # em_kg = [int(kg in gen) for kg, gen in zip(facts, preds)]
 
                 metrics["acc_label"] = sum(em_label) / len(targets)
-                metrics["acc_kg"] = sum(em_kg) / len(targets)
+                metrics["acc_kg"] = sum(em_kg) / num_gen_kgs
 
         return metrics
 
@@ -395,6 +401,15 @@ class TranslationOutput:
             gen = gen.split(",")[0].strip()
 
         return gen
+
+    def post_process(self, generated, targets):
+        if "because" in generated:
+            gen_kg = generated.split("because")[1].split(",")
+        else:
+            gen_kg = generated.split(",")
+        knowledge = targets.split("because")[1]
+        num_kg = len(knowledge.split(","))
+        return gen_kg, knowledge, num_kg
 
     def normalize_text(self, text):
         """Removing articles and punctuation, and standardizing whitespace are all typical text processing steps."""
@@ -413,6 +428,9 @@ class TranslationOutput:
             return text.lower()
 
         return white_space_fix(remove_articles(remove_punc(lower(text))))
+
+    def recall_score(self, gen, kg):
+        return sum([int(self.normalize_text(p) in self.normalize_text(kg)) for p in gen])
 
     def compute_exact_match(self, prediction, truth):
         return int(self.normalize_text(truth) == self.normalize_text(prediction))
