@@ -207,7 +207,12 @@ class MetaKnowledgeRunner(pl.LightningModule):
         #     diffopt.step(loss)
 
         for iter in range(self.hparams.n_inner_iter):
-            train_out = fmodel(features, print_out, is_inner=True)
+            try:
+                train_out = fmodel(features, print_out, is_inner=True)
+            except:
+                print("inner loop error")
+                print(print_out)
+                continue
             train_loss = train_out["loss"]
             if not train_loss.requires_grad:
                 train_loss.requires_grad = True
@@ -240,8 +245,13 @@ class MetaKnowledgeRunner(pl.LightningModule):
         #     return {"loss": loss / len(features)}
 
         with torch.no_grad():
-            train_pred = fmodel(
-                features, print_out, is_inner=True)
+            try:
+                train_pred = fmodel(
+                    features, print_out, is_inner=True)
+            except:
+                print("inner loop error")
+                print(print_out)
+                return {"loss": torch.tensor(0., device=self.device)}
             return train_pred
 
     def config_inner_optimizer(self):
@@ -467,7 +477,9 @@ class MetaKnowledgeRunner(pl.LightningModule):
         if len(outputs) == 0:
             metrics = {
                 "acc": 0.50,
-                "f1": 0.50
+                "f1": 0.50,
+                "acc_label": 0.50,
+                "acc_kg": 0.50,
             }
             for metric_name, metric_value in metrics.items():
                 self.log(
@@ -686,17 +698,20 @@ def run(args):
 
     if args.do_train:
         if args.load_checkpoint is not None:
-            trainer.fit(model, ckpt_path=args.load_checkpoint)
-        else:
-            trainer.fit(model)
-            # util_logger.info('Saving best model to wandb')
-            # best_model_path = trainer.checkpoint_callback.best_model_path
-            # if os.path.isfile(best_model_path):
-            #     artifact = wandb.Artifact(args.wandb_name, type='model')
-            #     artifact.add_file(best_model_path)
-            #     wandb.run.log_artifact(artifact)
-            # else:
-            #     util_logger.error('No best model found')
+            model = MetaKnowledgeRunner.load_from_checkpoint(
+                args.load_checkpoint,
+                config=args
+            )
+        trainer.fit(model)
+
+        # util_logger.info('Saving best model to wandb')
+        # best_model_path = trainer.checkpoint_callback.best_model_path
+        # if os.path.isfile(best_model_path):
+        #     artifact = wandb.Artifact(args.wandb_name, type='model')
+        #     artifact.add_file(best_model_path)
+        #     wandb.run.log_artifact(artifact)
+        # else:
+        #     util_logger.error('No best model found')
 
     if args.do_eval:
         try:
@@ -706,4 +721,5 @@ def run(args):
         if args.baseline:
             trainer.test(model, ckpt_path=args.load_checkpoint)
         else:
+            # train on 1 datapoint for gradient enabling in validation
             trainer.fit(model, ckpt_path=args.load_checkpoint)
