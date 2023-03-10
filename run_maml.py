@@ -722,4 +722,8 @@ def run(args):
             trainer.test(model, ckpt_path=args.load_checkpoint)
         else:
             # train on 1 datapoint for gradient enabling in validation
-            trainer.fit(model, ckpt_path=args.load_checkpoint)
+            model = MetaKnowledgeRunner.load_from_checkpoint(
+                args.load_checkpoint,
+                config=args
+            )
+            trainer.fit(model)

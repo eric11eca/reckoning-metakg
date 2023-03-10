@@ -9,18 +9,6 @@ from torch.utils.data import RandomSampler, SequentialSampler
 from .utils.py_io import read_jsonl
 
 
-def kg_as_autoregressive(triples, rules, baseline=False):
-    if baseline:
-        facts = [kg['text'] for kg in triples.values()]
-        facts += [kg['text'] for kg in rules.values()]
-    else:
-        facts = [f"triple_{i}: {kg['text']}" for i,
-                 kg in enumerate(triples.values())]
-        facts.extend([f"rule_{i}: {kg['text']}" for i,
-                      kg in enumerate(rules.values())])
-    return facts
-
-
 class DataReader:
     """Custom dataset loader for QA problems."""
 
@@ -82,6 +70,17 @@ class ProofWriterDataReader(DataReader):
             context = [k.replace(".", " ") for k in instance["all_facts"]]
         else:
             context = [k.replace(".", " ") for k in instance["facts"]]
+
+        kgs = [k.replace(".", " ") for k in instance["facts"]]
+        distractors = list(set(context) - set(kgs))
+
+        if args.load_order == "pre":
+            context = kgs + distractors
+        elif args.load_order == "post":
+            context = distractors + kgs
+        elif args.load_order == "in":
+            random.shuffle(context)
+
         answer = answer_map[instance["answer"]]
 
         fact_enum = [f"fact_{i}" for i in range(len(context))]
@@ -105,7 +104,8 @@ class ProofWriterDataReader(DataReader):
                     fact_in.append(f"fact_{i}: {fact}")
                 facts.append(fact_in)
                 if args.multi_task:
-                    evidence = [k.replace(".", "") for k in instance["facts"]]
+                    # evidence = [k.replace(".", " ") for k in instance["facts"]]
+                    evidence = instance["facts"]
                     item[1] = f"{item[1]} because {','.join(evidence)}"
 
         return [{"guid": guid, "qa_pairs": [qa_pairs[i]], "facts": facts[i]} for i in range(len(qa_pairs))]

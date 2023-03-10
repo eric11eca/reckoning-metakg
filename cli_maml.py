@@ -96,6 +96,8 @@ def main():
                         help='whether to do sanity check with no facts')
     parser.add_argument('--random_facts', action='store_true', default=False,
                         help='whether to do sanity check with random facts')
+    parser.add_argument('--load_order', type=str, default='in',
+                        help='order to load the facts')
     parser.add_argument('--freeze_partial', action='store_true', default=False,
                         help='whether to freeze partial layers of the model')
 

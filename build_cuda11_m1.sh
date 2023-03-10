@@ -1,4 +1,4 @@
-NUM=12
+NUM=11
 
 CURRENT=${NUM}
 IMAGE_NAME=meta_kg
@@ -20,3 +20,4 @@ export KUBECONFIG=~/.kube/config_runai
 # runai submit --name meta-kg-clutrr -i eric11eca/meta_kg_8 --interactive --attach -g 1 --node-type G10
 # runai submit --name meta-kg-proof5 -i eric11eca/meta_kg_8 --attach -g 1 --node-type G10
 # runai submit --name meta-kg-clutrr6 -i eric11eca/meta_kg_9 --attach -g 1 --node-type G10
+# runai submit --name meta-kg-proof2-d4 -i eric11eca/meta_kg_2 --attach -g 1 --node-type G10
