@@ -42,6 +42,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
         self.global_epoch_counter = 0
 
         self.model = PretrainedEncoderDecoder.from_config(config)
+        self.model = torch.compile(self.model)
         self.tokenizer = self.model.tokenizer
         self.inner_schedular = LSLRSchedular(
             num_inner_iter=config.n_inner_iter,
@@ -643,7 +644,7 @@ class MetaKnowledgeRunner(pl.LightningModule):
             self.hparams,
             self.tokenizer,
             self.hparams.train_dir,
-            data_type="test",
+            data_type="dev",
             is_training=False
         )
         self.test_data = MetaKnowledgeDataset(
