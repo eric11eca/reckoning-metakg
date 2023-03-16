@@ -1,6 +1,6 @@
 #!/bin/bash
 
-DATASET="owa_proof_5_hop_d2"
+DATASET="owa_proof_5_hop"
 DATASET_TYPE="proofwriter"
 INPUT_FORMAT="lm"
 MODEL_TYPE="gpt2"
@@ -13,7 +13,7 @@ INNER_STEPS=5
 INNER_OPT="adam"
 #POSTFIX="no-facts"
 #POSTFIX="baseline"
-LOAD_ORDER="in"
+LOAD_ORDER="norm"
 POSTFIX="cl"
 CHEKPOINT="./output/model.ckpt"
  
@@ -21,8 +21,8 @@ echo "Downloading data..."
 mkdir -p data/${DATASET}
 wandb artifact get epfl_nlp_phd/data-collection/${DATASET}:latest --root data/${DATASET}
 
-echo "Downloading model..."
-wandb artifact get epfl_nlp_phd/meta-knowledge/owa_proof_5_hop_dall:best_k --root ./output/
+# echo "Downloading model..."
+# wandb artifact get epfl_nlp_phd/meta-knowledge/owa_proof_5_hop_dall:best_k --root ./output/
 
 python cli_maml.py \
     --do_train \
@@ -45,7 +45,6 @@ python cli_maml.py \
     --device_idx 0 \
     --multi_task \
     --load_order ${LOAD_ORDER} \
-    --load_checkpoint ${CHEKPOINT} \
+    # --load_checkpoint ${CHEKPOINT} \
     # --max_data 2000 \
     # --freeze_partial
-

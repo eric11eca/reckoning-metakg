@@ -1,4 +1,4 @@
-FROM eric11eca/meta_kg_8:latest
+FROM eric11eca/meta_kg_7:latest
 
 ARG DUMMY=unknown
 RUN DUMMY=${DUMMY}

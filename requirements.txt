@@ -1,6 +1,7 @@
 rich
 tqdm
 wandb
+torch
 pytorch-lightning
 torchmetrics
 sentence_transformers

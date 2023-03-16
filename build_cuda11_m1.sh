@@ -1,4 +1,4 @@
-NUM=11
+NUM=1
 
 CURRENT=${NUM}
 IMAGE_NAME=meta_kg
@@ -14,8 +14,6 @@ docker buildx build --build-arg DUMMY='cloud' --platform linux/amd64 --load -f $
 echo "Pushing $IM_NAME to Harbor"
 docker tag $IM_NAME eric11eca/$IM_NAME
 docker push eric11eca/$IM_NAME
-
-export KUBECONFIG=~/.kube/config_runai
 
 # runai submit --name meta-kg-clutrr -i eric11eca/meta_kg_8 --interactive --attach -g 1 --node-type G10
 # runai submit --name meta-kg-proof5 -i eric11eca/meta_kg_8 --attach -g 1 --node-type G10
