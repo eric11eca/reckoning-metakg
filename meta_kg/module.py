@@ -60,23 +60,6 @@ class MetaModule(pl.LightningModule):
 
         write_json(metadata, f"{config.run_dir}/metadata.json")
 
-    def validation_step_logic(self, output_dict) -> Dict:
-        raise NotImplementedError
-
-    def training_step(self, batch, batch_idx) -> Dict:
-        """Runs a single training step
-
-        :param batch: the target batch
-        :param batch_idx: the path id
-        :rtype: dict
-        :returns: dictionary that includes loss
-        """
-
-        output_dict = self.step(batch, is_train=True)
-        self.train_step_logic(output_dict)
-        self.global_trainin_step += 1
-        return output_dict
-
     def on_train_epoch_end(self):
         """Called at the end of the training epoch
 
@@ -84,22 +67,6 @@ class MetaModule(pl.LightningModule):
         :rtype: None 
         """
         self.global_epoch_counter += 1
-
-    def validation_step_logic(self, output_dict) -> Dict:
-        raise NotImplementedError
-
-    def validation_step(self, batch, batch_idx) -> Dict:
-        """Runs a single validation step
-
-        :param batch: the target batch
-        :param batch_idx: the path id
-        :rtype: dict
-        :returns: dictionary that includes loss
-        """
-        output_dict = self.step(batch, is_train=False)
-        self.validation_step_logic(batch)
-        self.validation_step_outputs.append(output_dict)
-        return output_dict
 
     def validation_epoch_logic(self, outputs):
         raise NotImplementedError
@@ -119,7 +86,7 @@ class MetaModule(pl.LightningModule):
                          on_epoch=True, prog_bar=False)
             return
 
-        val_loss = self.validation_epoch_logic(outputs)
+        val_loss, outputs = self.validation_epoch_logic(outputs)
         self.log("val_loss", val_loss, on_epoch=True, prog_bar=True)
 
         epoch = self.global_epoch_counter
@@ -374,10 +341,6 @@ class MetaReasonLMModule(MetaModule):
             "evaluate": not is_train
         }
 
-        if "labels" in batch and self.hparams.classifier:
-            dev_features["labels"] = batch["labels"].to(
-                torch.device(self.hparams.device))
-
         if self.hparams.inner_grad_accumulate:
             data_keys = ["train_input_ids",
                          "train_attention_mask", "train_token_type_ids"]
@@ -537,7 +500,15 @@ class MetaReasonLMModule(MetaModule):
 
         return output_dict
 
-    def train_step_logic(self, output_dict) -> Dict:
+    def training_step(self, batch, batch_idx) -> Dict:
+        """Runs a single training step
+
+        :param batch: the target batch
+        :param batch_idx: the path id
+        :rtype: dict
+        :returns: dictionary that includes loss
+        """
+        output_dict = self.step(batch, is_train=True)
         for mkey in ["inner_loss", "outer_loss"]:
             self.log(
                 f'batch_{mkey}',
@@ -546,24 +517,45 @@ class MetaReasonLMModule(MetaModule):
                 on_epoch=False,
                 prog_bar=True
             )
+        self.global_trainin_step += 1
+        return output_dict
 
-    def validation_step_logic(self, output_dict) -> Dict:
-        assert len(output_dict["print_out"]["gen_out"]) == len(
-            output_dict["print_out"]["answer"])
-        self.log(
-            f'val_batch_loss',
-            output_dict["loss"],
-            on_step=True,
-            on_epoch=False,
-            prog_bar=False
-        )
+    def validation_step(self, batch, batch_idx) -> Dict:
+        """Runs a single validation step
+
+        :param batch: the target batch
+        :param batch_idx: the path id
+        :rtype: dict
+        :returns: dictionary that includes loss
+        """
+        torch.set_grad_enabled(True)
+        self.model.train()
+        output_dict = self.step(batch, is_train=False)
+        for mkey in ["inner_loss", "outer_loss"]:
+            self.log(
+                f'val_batch_{mkey}',
+                output_dict[mkey],
+                on_step=True,
+                on_epoch=False,
+                prog_bar=False
+            )
+        self.validation_step_outputs.append(output_dict)
+        return output_dict
 
     def validation_epoch_logic(self, outputs):
         val_loss = torch.stack([x["loss"] for x in outputs]).mean()
+        print_out_flatten = []
+        for out in outputs:
+            print_out_flatten += out["print_out"]
+        outputs = [{"print_out": item} for item in print_out_flatten]
         return val_loss, outputs
 
     def test_epoch_logic(self, outputs):
         test_loss = torch.stack([x["loss"] for x in outputs]).mean()
+        print_out_flatten = []
+        for out in outputs:
+            print_out_flatten += out["print_out"]
+        outputs = [{"print_out": item} for item in print_out_flatten]
         return test_loss, outputs
 
 
@@ -660,7 +652,15 @@ class CausalLMModule(MetaModule):
 
         return output_dict
 
-    def train_step_logic(self, output_dict) -> Dict:
+    def training_step(self, batch, batch_idx) -> Dict:
+        """Runs a single training step
+
+        :param batch: the target batch
+        :param batch_idx: the path id
+        :rtype: dict
+        :returns: dictionary that includes loss
+        """
+        output_dict = self.base_step(batch, is_train=True)
         self.log(
             f'batch_train_loss',
             output_dict["train_loss"],
@@ -668,8 +668,18 @@ class CausalLMModule(MetaModule):
             on_epoch=False,
             prog_bar=True
         )
+        self.global_trainin_step += 1
+        return output_dict
 
-    def validation_step_logic(self, output_dict) -> Dict:
+    def validation_step(self, batch, batch_idx) -> Dict:
+        """Runs a single validation step
+
+        :param batch: the target batch
+        :param batch_idx: the path id
+        :rtype: dict
+        :returns: dictionary that includes loss
+        """
+        output_dict = self.base_step(batch, is_train=False)
         assert len(output_dict["print_out"]["gen_out"]) == len(
             output_dict["print_out"]["answer"])
         self.log(
@@ -679,6 +689,8 @@ class CausalLMModule(MetaModule):
             on_epoch=False,
             prog_bar=False
         )
+        self.validation_step_outputs.append(output_dict)
+        return output_dict
 
     def validation_epoch_logic(self, outputs):
         val_loss = torch.stack([x["loss"] for x in outputs]).mean()

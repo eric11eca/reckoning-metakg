@@ -13,45 +13,28 @@ util_logger = logging.getLogger(
     'meta_knowledge.runner'
 )
 
+MODULE_DICT = {
+    "all": MetaReasonLMModule,
+    "prefix": MetaReasonPrefixLMModule
+}
 
-def get_module(args, module="all"):
-    if module == "all":
-        return init_kg_maml_module(args)
-    elif module == "prefix":
-        return init_kg_maml_prefix_module(args)
-    else:
-        return init_baseline_module(args)
-
-
-def init_baseline_module(args):
-    return CausalLMModule(args)
-
-
-def init_kg_maml_module(args):
-    return MetaReasonLMModule(args)
-
-
-def init_kg_maml_prefix_module(args):
-    return MetaReasonPrefixLMModule(args)
 
 
 def run(args):
     util_logger.info('Setting up configuration for model runner...')
     setup_wandb(args)
 
-    if args.baseline:
-        model = get_module(args, module="baseline")
-    else:
-        model = get_module(args, module=args.inner_mode)
-
+    module_class = MODULE_DICT.get(args.inner_mode, CausalLMModule)
     trainer = setup_trainer(args)
 
     if args.do_train:
         if args.load_checkpoint is not None:
-            model = CausalLMModule.load_from_checkpoint(
+            model = module_class.load_from_checkpoint(
                 args.load_checkpoint,
                 config=args
             )
+        else:
+            model = module_class(args)
         trainer.fit(model)
 
     if args.do_eval:
@@ -60,10 +43,11 @@ def run(args):
         except AssertionError:
             util_logger.error('Checkpoint path is not provided for evaluation')
         if args.baseline:
+            model = CausalLMModule(args)
             trainer.test(model, ckpt_path=args.load_checkpoint)
         else:
             # train on 1 datapoint for gradient enabling in validation
-            model = CausalLMModule.load_from_checkpoint(
+            model = module_class.load_from_checkpoint(
                 args.load_checkpoint,
                 config=args
             )

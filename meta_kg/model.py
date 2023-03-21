@@ -37,6 +37,7 @@ class CausalLM(nn.Module):
     """
 
     def __init__(self, model, tokenizer, model_config, global_config):
+        super().__init__()
         self.model = model
         self.model_config = model_config
         self.tokenizer = tokenizer
@@ -61,8 +62,8 @@ class CausalLM(nn.Module):
         model_class = model_class_registry[config.model_type]
         tokenizer = AutoTokenizer.from_pretrained(config.model_name_or_path)
         model_config = AutoConfig.from_pretrained(config.model_name_or_path)
-        model.config.pad_token_id = tokenizer.eos_token_id
         model = model_class.from_pretrained(config.model_name_or_path)
+        model.config.pad_token_id = tokenizer.eos_token_id
 
         if config.freeze_partial:
             cls.freeze_params(model)
