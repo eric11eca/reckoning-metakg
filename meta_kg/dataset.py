@@ -1,4 +1,3 @@
-import uuid
 import torch
 import random
 
@@ -92,11 +91,7 @@ class ProofWriterDataReader(DataReader):
         for item in qa_pairs:
             question = item[0]
             question = question.replace("?", "")
-            if args.inner_mode == "closed":
-                prefix = f"To determine {question}, we need to know"
-                facts.append(
-                    [f"{prefix} fact_{i}: {fact}" for i, fact in enumerate(context)])
-            elif args.baseline:
+            if args.baseline:
                 facts.append(context)
             else:
                 fact_in = []
@@ -143,11 +138,7 @@ class ClutrrDataReader(DataReader):
         for item in qa_pairs:
             question = item[0]
             question = question.replace("?", "")
-            if args.inner_mode == "closed":
-                prefix = f"To determine {question}, we need to know"
-                facts.append(
-                    [f"{prefix} fact_{i}: {fact}" for i, fact in enumerate(story)])
-            elif args.baseline:
+            if args.baseline:
                 facts.append([fact for fact in story])
                 if args.multi_task:
                     recalls = [f"{fact[0]} {fact[1]}" for fact in story]
@@ -195,11 +186,7 @@ class FolioDataReader(DataReader):
         for item in qa_pairs:
             question = item[0]
             question = question.replace("?", "")
-            if args.inner_mode == "closed":
-                prefix = f"To determine {question}, we need to know"
-                facts.append(
-                    [f"{prefix} fact_{i}: {fact}" for i, fact in enumerate(context)])
-            elif args.baseline:
+            if args.baseline:
                 facts.append([fact for fact in context])
             else:
                 fact_in = []
@@ -237,11 +224,7 @@ class EntailmentTreeDataReader():
         for item in qa_pairs:
             question = item[0]
             question = question.replace("?", "")
-            if args.inner_mode == "closed":
-                prefix = f"To determine {question}, we need to know"
-                facts.append(
-                    [f"{prefix} fact_{i}: {fact}" for i, fact in enumerate(context)])
-            elif args.baseline:
+            if args.baseline:
                 facts.append([fact for fact in context])
             else:
                 fact_in = []
@@ -284,7 +267,6 @@ class MetaKnowledgeDataset(object):
 
         reader_classes = {
             "proofwriter": ProofWriterDataReader,
-            "clutrr1": ClutrrDataReader,
             "clutrr": ClutrrDataReader,
             "folio": FolioDataReader,
             "entailment_tree": EntailmentTreeDataReader,

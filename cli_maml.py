@@ -35,8 +35,8 @@ def main():
     parser.add_argument("--baseline", action='store_true')
 
     # Meta Learn parameters
-    parser.add_argument('--inner_mode', type=str, default='open',
-                        help='open book or closed book: [open, closed]')
+    parser.add_argument('--inner_mode', type=str, default='all',
+                        help='inner loop model tuning mode: [all, prefix, adaptor, lora, mend]')
     parser.add_argument('--inner_opt', type=str, default='sgd',
                         help='inner optimizer choice: [sgd, adam]')
     parser.add_argument('--inner_lr', type=float, default=1e-5,
@@ -57,10 +57,12 @@ def main():
                         help="Enable inner loop gradient accumulation.")
     parser.add_argument("--inner_accumulate_steps", default=4, type=int,
                         help="Number of inner loop gradient accumulation steps.")
-
-    # Preprocessing/decoding-related parameters
-    parser.add_argument("--max_seq_length", default=64, type=int)
-    parser.add_argument("--max_output_length", default=16, type=int)
+    parser.add_argument('--no_facts', action='store_true', default=False,
+                        help='whether to do sanity check with no facts')
+    parser.add_argument('--random_facts', action='store_true', default=False,
+                        help='whether to do sanity check with random facts')
+    parser.add_argument('--load_order', type=str, default='in',
+                        help='order to load the facts')
 
     # Training-related parameters
     parser.add_argument("--fact_batch_size", default=8, type=int,
@@ -90,27 +92,10 @@ def main():
     parser.add_argument('--device_idx', type=int, default=0)
     parser.add_argument('--load_checkpoint', type=str,
                         default=None, help='path to checkpoint')
-    parser.add_argument('--classifier', action='store_true', default=False,
-                        help='whether to use the classifier mode')
-    parser.add_argument('--no_facts', action='store_true', default=False,
-                        help='whether to do sanity check with no facts')
-    parser.add_argument('--random_facts', action='store_true', default=False,
-                        help='whether to do sanity check with random facts')
-    parser.add_argument('--load_order', type=str, default='in',
-                        help='order to load the facts')
     parser.add_argument('--freeze_partial', action='store_true', default=False,
                         help='whether to freeze partial layers of the model')
 
     # Other parameters
-    parser.add_argument("--verbose", action='store_true',
-                        help="If true, all of the warnings related to data processing will be printed. "
-                             "A number of warnings are expected for a normal SQuAD evaluation.")
-    parser.add_argument('--eval_period', type=int, default=100,
-                        help="Evaluate & save model")
-    parser.add_argument('--prefix', type=str, default='',
-                        help="Prefix for saving predictions")
-    parser.add_argument('--debug', action='store_true',
-                        help="Use a subset of data for debugging")
     parser.add_argument('--seed', type=int, default=42,
                         help="random seed for initialization")
     parser.add_argument('--max_data', type=int, default=0,

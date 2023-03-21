@@ -30,27 +30,27 @@ model_class_registry = {
 }
 
 
-class PretrainedEncoderDecoder(nn.Module):
-    """Generic transformer-based pretrained encoder decoder (e.g., T5, BART, etc..)
+class CausalLM(nn.Module):
+    """
+    Generic transformer-based autoregressive language model (e.g., GPT-2, GPT-J, etc..)
     which has the added feature of doing on-the-fly generation during training and evaluation.
     """
 
     def __init__(self, model, tokenizer, model_config, global_config):
-        super().__init__()
         self.model = model
         self.model_config = model_config
         self.tokenizer = tokenizer
         self.global_config = global_config
 
-        # self.lm_head_inner = nn.Linear(
-        #     model_config.n_embd,
-        #     model_config.vocab_size,
-        #     bias=False
-        # )
-        # self.lm_head_inner.load_state_dict(
-        #     self.model.lm_head.state_dict()
-        # )
-        # self.lm_head_inner.requires_grad = False
+    @staticmethod
+    def freeze_params(model):
+        for name, param in model.named_parameters():
+            if np.any([x in name for x in [
+                '.0.', '.1.', '.2.', '.3.',
+                '.4.', '.5.', '.6.', '.7.',
+            ]]):
+                print(f"Freezing {name}")
+                param.requires_grad = False
 
     @classmethod
     def from_config(cls, config):
@@ -60,18 +60,12 @@ class PretrainedEncoderDecoder(nn.Module):
         """
         model_class = model_class_registry[config.model_type]
         tokenizer = AutoTokenizer.from_pretrained(config.model_name_or_path)
-        model = model_class.from_pretrained(config.model_name_or_path)
         model_config = AutoConfig.from_pretrained(config.model_name_or_path)
         model.config.pad_token_id = tokenizer.eos_token_id
+        model = model_class.from_pretrained(config.model_name_or_path)
 
         if config.freeze_partial:
-            for name, param in model.named_parameters():
-                if np.any([x in name for x in [
-                    '.0.', '.1.', '.2.', '.3.',
-                    '.4.', '.5.', '.6.', '.7.',
-                ]]):
-                    print(f"Freezing {name}")
-                    param.requires_grad = False
+            cls.freeze_params(model)
 
         return cls(
             model,
@@ -79,135 +73,6 @@ class PretrainedEncoderDecoder(nn.Module):
             model_config,
             config,
         )
-
-    def forward(self, features, print_out, is_inner=False):
-        """A modified version of forward method for the underlying transformer model.
-        :param features: the target inputs
-        :param print_out: data to print out during evaluation
-        """
-        main_out = {"print_out": print_out}
-        labels = features["input_ids"] if "gpt" in self.global_config.model_type else features["labels"]
-
-        outputs = self.model(
-            input_ids=features["input_ids"],
-            attention_mask=features["attention_mask"],
-            labels=labels,
-            output_hidden_states=True,
-            return_dict=True
-        )
-
-        # if is_inner:
-        #     hidden_states = outputs["hidden_states"][-1]
-        #     lm_logits = self.lm_head_inner(hidden_states)
-        # else:
-        lm_logits = outputs["logits"]
-
-        logits = lm_logits[..., :-1, :].contiguous()
-        labels = features["input_ids"][..., 1:].contiguous()
-        label_mask = features["token_type_ids"][..., 1:].contiguous()
-
-        loss_fct = nn.CrossEntropyLoss(reduction="none")
-        losses = loss_fct(
-            logits.view(-1, logits.size(-1)),
-            labels.view(-1)
-        )
-        losses = losses.view(logits.size(0), logits.size(1)) * label_mask
-        loss = torch.sum(losses, axis=1) / torch.sum(label_mask, axis=1)
-        main_out["loss"] = loss.mean()
-
-        if is_inner and self.global_config.inner_verbose:
-            main_out["token_loss"] = []
-            for i in range(losses.size(0)):
-                main_out["token_loss"].append(
-                    self.compute_token_loss(losses[i], labels[i]*label_mask[i]))
-            norm_logits = torch.softmax(logits, dim=-1)
-            batch_topk_tokens = self.get_tok_tokens(
-                norm_logits, labels, label_mask)
-            main_out["print_out"]["topk_tokens"] = [batch_topk_tokens]
-
-        if "evaluate" in features and features["evaluate"]:
-            if "question" in print_out:
-                main_out["print_out"]["gen_out"] = self.generate(print_out)
-            else:
-                main_out["print_out"]["gen_out"] = self.generate(
-                    main_out["print_out"]["prompt"])
-        return main_out
-
-    def generate(self, print_out):
-        device = self.model.device
-
-        output_length = []
-        for answer in print_out["answer"]:
-            out_ids = self.tokenizer(answer, return_tensors="pt").input_ids
-            output_length.append(out_ids.size(1))
-        max_out_length = max(output_length)
-
-        input_ids_batch = []
-        for question in print_out["question"]:
-            input_ids = self.tokenizer(
-                question, return_tensors="pt").input_ids.to(device)
-            input_ids_batch.append(input_ids)
-
-        outputs = []
-        for input_ids in input_ids_batch:
-            max_length = input_ids.size(1) + max_out_length
-            generation_config = GenerationConfig.from_pretrained(
-                "gpt2",
-                num_beams=5,
-                early_stopping=True,
-                top_p=None,
-                top_k=5,
-                do_sample=False,
-                num_return_sequences=1
-            )
-            self.model.generation_config = generation_config
-            greedy_output = self.model.generate(
-                input_ids=input_ids, max_length=max_length)
-            out = self.tokenizer.decode(
-                greedy_output[0],
-                skip_special_tokens=True)
-            outputs.append(out)
-
-        return outputs
-
-    def get_tok_tokens(self, norm_logits, input_ids, label_mask):
-        batch_topk_tokens = []
-        for i in range(norm_logits.size(0)):
-            input_ids_item = input_ids[i]
-            norm_logits_item = norm_logits[i] * label_mask[i].unsqueeze(-1)
-            prob_locs = torch.nonzero(norm_logits_item)[:, 0].unique()
-            topk_tokens = self.get_token_prob(
-                prob_locs, norm_logits_item, input_ids_item)
-            batch_topk_tokens.append(topk_tokens)
-        return batch_topk_tokens
-
-    def get_token_prob(self, prob_locs, norm_logits, input_ids, k=10):
-        topk_tokens_seq = []
-        for loc in prob_locs:
-            token = self.tokenizer.decode(input_ids[loc])
-            topk_prob = torch.topk(norm_logits[loc], k=k)
-            topk_tokens = []
-            for idx in topk_prob.indices:
-                gen_token = self.tokenizer.decode(idx.unsqueeze(0))
-                prob = round(norm_logits[loc][idx].item() * 100, 3)
-                topk_tokens.append((token.strip(), gen_token.strip(), prob))
-            topk_tokens_seq.append(topk_tokens)
-        return topk_tokens_seq
-
-    def compute_token_loss(self, loss, input_ids):
-        """Computes the token-level loss for the given loss
-        :param loss: the sentence-level LM loss
-        :param input_ids: the input ids
-        :return: the token-level LM loss
-        """
-        matched_loss = list(zip(loss.cpu().detach(), input_ids))
-        token_loss = {}
-        for i, (loss, token_id) in enumerate(matched_loss):
-            if token_id > 0:
-                token = self.tokenizer.decode(token_id).strip()
-                token_loss[f"{i}: {token}"] = loss.item()
-
-        return token_loss
 
     def output_parser_metrics(self, raw_output):
         """Function responsible for parsing the raw_output and computing particular
@@ -258,6 +123,141 @@ class PretrainedEncoderDecoder(nn.Module):
                 wandb.run.log_artifact(artifact)
 
         return metrics
+
+
+class MetaReasonLM(CausalLM):
+    def compute_loss(self, features, lm_logits):
+        """Compute the loss function for the model.
+
+        :param features: the input features
+        :param lm_logits: the logits from the model
+        :rtype: torch.Tensor
+        """
+        logits = lm_logits[..., :-1, :].contiguous()
+        labels = features["input_ids"][..., 1:].contiguous()
+        label_mask = features["token_type_ids"][..., 1:].contiguous()
+
+        loss_fct = nn.CrossEntropyLoss(reduction="none")
+        losses = loss_fct(
+            logits.view(-1, logits.size(-1)),
+            labels.view(-1)
+        )
+        losses = losses.view(logits.size(0), logits.size(1)) * label_mask
+        loss = torch.sum(losses, axis=1) / torch.sum(label_mask, axis=1)
+        return loss
+
+    def forward(self, features, print_out, is_inner=False):
+        """A modified version of forward method for the underlying transformer model.
+        :param features: the target inputs
+        :param print_out: data to print out during evaluation
+        """
+        main_out = {"print_out": print_out}
+        labels = features["input_ids"] if "gpt" in self.global_config.model_type else features["labels"]
+
+        outputs = self.model(
+            input_ids=features["input_ids"],
+            attention_mask=features["attention_mask"],
+            labels=labels,
+            output_hidden_states=True,
+            return_dict=True)
+        lm_logits = outputs["logits"]
+
+        loss = self.compute_loss(features, lm_logits)
+        main_out["loss"] = loss.mean()
+
+        if "evaluate" in features and features["evaluate"]:
+            if "question" in print_out:
+                main_out["print_out"]["gen_out"] = self.generate(print_out)
+            else:
+                main_out["print_out"]["gen_out"] = self.generate(
+                    main_out["print_out"]["prompt"])
+        return main_out
+
+    def generate(self, print_out):
+        device = self.model.device
+
+        output_length = []
+        for answer in print_out["answer"]:
+            out_ids = self.tokenizer(answer, return_tensors="pt").input_ids
+            output_length.append(out_ids.size(1))
+        max_out_length = max(output_length)
+
+        input_ids_batch = []
+        for question in print_out["question"]:
+            input_ids = self.tokenizer(
+                question, return_tensors="pt").input_ids.to(device)
+            input_ids_batch.append(input_ids)
+
+        outputs = []
+        for input_ids in input_ids_batch:
+            max_length = input_ids.size(1) + max_out_length
+            generation_config = GenerationConfig.from_pretrained(
+                "gpt2",
+                num_beams=5,
+                early_stopping=True,
+                top_p=None,
+                top_k=5,
+                do_sample=False,
+                num_return_sequences=1
+            )
+            self.model.generation_config = generation_config
+            greedy_output = self.model.generate(
+                input_ids=input_ids, max_length=max_length)
+            out = self.tokenizer.decode(
+                greedy_output[0],
+                skip_special_tokens=True)
+            outputs.append(out)
+
+        return outputs
+
+    def inner_loop_monitor(self, main_out, logits, labels, label_mask, losses):
+        main_out["token_loss"] = []
+        for i in range(losses.size(0)):
+            main_out["token_loss"].append(
+                self.compute_token_loss(losses[i], labels[i]*label_mask[i]))
+        norm_logits = torch.softmax(logits, dim=-1)
+        batch_topk_tokens = self.get_tok_tokens(
+            norm_logits, labels, label_mask)
+        main_out["print_out"]["topk_tokens"] = [batch_topk_tokens]
+
+    def get_tok_tokens(self, norm_logits, input_ids, label_mask):
+        batch_topk_tokens = []
+        for i in range(norm_logits.size(0)):
+            input_ids_item = input_ids[i]
+            norm_logits_item = norm_logits[i] * label_mask[i].unsqueeze(-1)
+            prob_locs = torch.nonzero(norm_logits_item)[:, 0].unique()
+            topk_tokens = self.get_token_prob(
+                prob_locs, norm_logits_item, input_ids_item)
+            batch_topk_tokens.append(topk_tokens)
+        return batch_topk_tokens
+
+    def get_token_prob(self, prob_locs, norm_logits, input_ids, k=10):
+        topk_tokens_seq = []
+        for loc in prob_locs:
+            token = self.tokenizer.decode(input_ids[loc])
+            topk_prob = torch.topk(norm_logits[loc], k=k)
+            topk_tokens = []
+            for idx in topk_prob.indices:
+                gen_token = self.tokenizer.decode(idx.unsqueeze(0))
+                prob = round(norm_logits[loc][idx].item() * 100, 3)
+                topk_tokens.append((token.strip(), gen_token.strip(), prob))
+            topk_tokens_seq.append(topk_tokens)
+        return topk_tokens_seq
+
+    def compute_token_loss(self, loss, input_ids):
+        """Computes the token-level loss for the given loss
+        :param loss: the sentence-level LM loss
+        :param input_ids: the input ids
+        :return: the token-level LM loss
+        """
+        matched_loss = list(zip(loss.cpu().detach(), input_ids))
+        token_loss = {}
+        for i, (loss, token_id) in enumerate(matched_loss):
+            if token_id > 0:
+                token = self.tokenizer.decode(token_id).strip()
+                token_loss[f"{i}: {token}"] = loss.item()
+
+        return token_loss
 
 
 @ dataclass
