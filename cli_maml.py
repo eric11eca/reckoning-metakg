@@ -63,6 +63,8 @@ def main():
                         help='whether to do sanity check with random facts')
     parser.add_argument('--load_order', type=str, default='in',
                         help='order to load the facts')
+    parser.add_argument("--prefix_dim", default=100, type=int,
+                        help="Prefix dimension.")
 
     # Training-related parameters
     parser.add_argument("--fact_batch_size", default=8, type=int,
