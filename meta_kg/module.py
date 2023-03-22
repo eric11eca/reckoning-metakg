@@ -283,20 +283,25 @@ class MetaReasonLMModule(MetaModule):
 
         self.model = MetaReasonLM.from_config(config)
         self.tokenizer = self.model.tokenizer
+        self.load_dataset()
+        self.inner_lr_schedular_config(
+            config.n_inner_iter,
+            config.inner_lr
+        )
+        self.model_logger.info(
+            f'Loaded runner instance, global_epoch_counter={self.global_epoch_counter}'
+        )
+
+    def inner_lr_schedular_config(self, n_inner_iter, inner_lr):
         self.inner_schedular = LSLRSchedular(
-            num_inner_iter=config.n_inner_iter,
-            init_lr=config.inner_lr)
+            num_inner_iter=n_inner_iter,
+            init_lr=inner_lr)
         params_opt = list(filter(
             lambda p: p[1].requires_grad,
             self.model.named_parameters()))
         self.inner_schedular.initialization(
             self.model.named_parameters(),
             params_opt)
-
-        self.load_dataset()
-        self.model_logger.info(
-            f'Loaded runner instance, global_epoch_counter={self.global_epoch_counter}'
-        )
 
     def _batch_split(self, row):
         inner_loader = DataLoader(
@@ -566,7 +571,13 @@ class MetaReasonPrefixLMModule(MetaReasonLMModule):
         peft_config = PrefixTuningConfig(
             task_type=TaskType.CAUSAL_LM,
             num_virtual_tokens=config.prefix_dim)
-        self.model = get_peft_model(self.model, peft_config)
+        self.model.model = get_peft_model(
+            self.model.model, peft_config)
+
+        self.inner_lr_schedular_config(
+            config.n_inner_iter,
+            config.inner_lr
+        )
 
         self.prefix_params = {}
         self.model_params = {}
