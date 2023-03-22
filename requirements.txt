@@ -9,3 +9,4 @@ transformers
 scikit-learn
 datasets
 deepspeed
+accelerate
