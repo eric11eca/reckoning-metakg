@@ -194,6 +194,7 @@ class MetaReasonLM(CausalLM):
             max_length = input_ids.size(1) + max_out_length
             generation_config = GenerationConfig.from_pretrained(
                 "gpt2",
+                max_length=max_length,
                 num_beams=5,
                 early_stopping=True,
                 top_p=None,
@@ -203,7 +204,7 @@ class MetaReasonLM(CausalLM):
             )
             self.model.generation_config = generation_config
             greedy_output = self.model.generate(
-                input_ids=input_ids, max_length=max_length)
+                input_ids=input_ids)
             out = self.tokenizer.decode(
                 greedy_output[0],
                 skip_special_tokens=True)

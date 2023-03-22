@@ -1,6 +1,5 @@
 import os
 import logging
-import torch
 import pytorch_lightning as pl
 
 from pprint import pformat
@@ -9,7 +8,8 @@ from pytorch_lightning.callbacks import (
     LearningRateMonitor,
     EarlyStopping,
     ModelCheckpoint,
-    RichProgressBar
+    RichProgressBar,
+    GradientAccumulationScheduler
 )
 from pytorch_lightning.callbacks.progress.rich_progress import RichProgressBarTheme
 
@@ -37,9 +37,11 @@ def setup_trainer(args) -> pl.Trainer:
         monitor=args.callback_monitor,
         mode=mode,
         save_top_k=1,
-        verbose=True
+        verbose=True,
+        auto_insert_metric_name=True,
     )
 
+    accumulator = GradientAccumulationScheduler(scheduling={0: 2})
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
     early_stop_callback = EarlyStopping(
@@ -68,6 +70,7 @@ def setup_trainer(args) -> pl.Trainer:
         checkpoint_callback,
         early_stop_callback,
         progress_bar,
+        accumulator
     ]
 
     # train parameters
@@ -76,7 +79,6 @@ def setup_trainer(args) -> pl.Trainer:
         devices=[args.device_idx],
         max_epochs=args.num_train_epochs,
         gradient_clip_val=args.max_grad_norm,
-        accumulate_grad_batches=args.gradient_accumulation_steps,
         precision=32,
         callbacks=callbacks,
         num_sanity_val_steps=4,
