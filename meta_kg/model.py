@@ -191,22 +191,23 @@ class MetaReasonLM(CausalLM):
 
         outputs = []
         for input_ids in input_ids_batch:
-            max_length = input_ids.size(1) + max_out_length
+            # max_length = input_ids.size(1) + max_out_length
             generation_config = GenerationConfig.from_pretrained(
                 "gpt2",
-                max_length=max_length,
+                max_new_tokens=max_out_length,
                 num_beams=5,
                 early_stopping=True,
                 top_p=None,
-                top_k=5,
                 do_sample=False,
-                num_return_sequences=1
+                num_return_sequences=1,
+                pad_token_id=self.tokenizer.eos_token_id,
             )
-            self.model.generation_config = generation_config
+
             greedy_output = self.model.generate(
-                input_ids=input_ids)
+                input_ids=input_ids,
+                generation_config=generation_config)
             out = self.tokenizer.decode(
-                greedy_output[0],
+                greedy_output[0][input_ids.shape[1]:],
                 skip_special_tokens=True)
             outputs.append(out)
 
@@ -357,7 +358,8 @@ class TranslationOutput:
         targets = self.targets
         outputs = self.outputs
 
-        preds = [out.split('?')[1].strip() for out in outputs]
+        # preds = [out.split('?')[1].strip() for out in outputs]
+        preds = outputs
 
         metrics = {}
         if targets and preds and len(targets) == len(preds):
@@ -380,10 +382,6 @@ class TranslationOutput:
                 em_kg = [self.recall_score(gen, kg)
                          for gen, kg, _ in eval_paris]
                 num_gen_kgs = sum([len(gen) for gen, _, _ in eval_paris])
-
-                # facts = [t.split('because')[1].strip()
-                #          if "because" in t else t for t in targets]
-                # em_kg = [int(kg in gen) for kg, gen in zip(facts, preds)]
 
                 metrics["acc_label"] = sum(em_label) / len(targets)
                 metrics["acc_kg"] = sum(em_kg) / num_gen_kgs
