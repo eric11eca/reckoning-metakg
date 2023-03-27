@@ -6,7 +6,8 @@ from meta_kg.utils.wandb_utils import setup_wandb
 from meta_kg.module import (
     CausalLMModule,
     MetaReasonLMModule,
-    MetaReasonPrefixLMModule
+    MetaReasonPrefixLMModule,
+    MetaReasonLoraLMModule
 )
 
 util_logger = logging.getLogger(
@@ -15,9 +16,9 @@ util_logger = logging.getLogger(
 
 MODULE_DICT = {
     "all": MetaReasonLMModule,
-    "prefix": MetaReasonPrefixLMModule
+    "prefix": MetaReasonPrefixLMModule,
+    "lora": MetaReasonLoraLMModule,
 }
-
 
 
 def run(args):
