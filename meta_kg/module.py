@@ -11,6 +11,7 @@ from transformers import get_linear_schedule_with_warmup
 from peft import (
     get_peft_model,
     PrefixTuningConfig,
+    LoraConfig,
     TaskType
 )
 
@@ -64,7 +65,7 @@ class MetaModule(pl.LightningModule):
         """Called at the end of the training epoch
 
         :param outputs: the outputs of the train step
-        :rtype: None 
+        :rtype: None
         """
         self.global_epoch_counter += 1
 
@@ -74,7 +75,7 @@ class MetaModule(pl.LightningModule):
     def on_validation_epoch_end(self):
         """Called at the end of the validation epoch
         :param outputs: the outputs of the train step
-        :rtype: None 
+        :rtype: None
         """
         outputs = self.validation_step_outputs
         if len(outputs) == 0:
@@ -303,58 +304,6 @@ class MetaReasonLMModule(MetaModule):
             self.model.named_parameters(),
             params_opt)
 
-    def _batch_split(self, row):
-        inner_loader = DataLoader(
-            row, batch_size=4, shuffle=False)
-        splited = [inner_batch for inner_batch in inner_loader]
-        return splited
-
-    def _batch_aggregate(self, rb):
-        inputs, masks, types = rb[0], rb[1], rb[2]
-        train_feature = {
-            "input_ids": inputs,
-            "attention_mask": masks,
-            "token_type_ids": types,
-            "evaluate": False
-        }
-        return train_feature
-
-    def get_features(self, batch, is_train: bool):
-        """Get features from batch"""
-        print_out = batch["print_out"]
-        train_features = {
-            "input_ids": batch["train_input_ids"].to(
-                torch.device(self.hparams.device)),
-            "attention_mask": batch["train_attention_mask"].to(
-                torch.device(self.hparams.device)),
-            "token_type_ids": batch["train_token_type_ids"].to(
-                torch.device(self.hparams.device)),
-            "evaluate": False
-        }
-
-        if "train_labels" in batch:
-            train_features["labels"] = batch["train_labels"].to(
-                torch.device(self.hparams.device))
-
-        dev_features = {
-            "input_ids": batch["input_ids"].to(
-                torch.device(self.hparams.device)),
-            "attention_mask": batch["attention_mask"].to(
-                torch.device(self.hparams.device)),
-            "token_type_ids": batch["token_type_ids"].to(
-                torch.device(self.hparams.device)),
-            "evaluate": not is_train
-        }
-
-        if self.hparams.inner_grad_accumulate:
-            data_keys = ["train_input_ids",
-                         "train_attention_mask", "train_token_type_ids"]
-            rebatch = [self._batch_split(batch[key]) for key in data_keys]
-            train_features = [
-                self._batch_aggregate(rb) for rb in zip(*rebatch)]
-
-        return train_features, dev_features, print_out
-
     def inner_loop_step(self, features, print_out, fmodel, diffopt) -> Dict:
         """Runs a single inner loop step
 
@@ -399,31 +348,6 @@ class MetaReasonLMModule(MetaModule):
                 return {"loss": torch.tensor(0., device=self.device)}
             return train_pred
 
-    def config_inner_optimizer(self):
-        """Configures the inner loop optimizer
-
-        :param model_params: the model parameters
-        :rtype: torch.optim
-        :returns: the optimizer
-        """
-        model_params = []
-        for _, param in self.model.named_parameters():
-            if param.requires_grad:
-                model_params.append(
-                    {"params": param, "lr": self.hparams.inner_lr})
-
-        if self.hparams.inner_opt == "adam":
-            inner_opt = torch.optim.AdamW(
-                model_params,
-                amsgrad=False
-            )
-        else:
-            inner_opt = torch.optim.SGD(
-                model_params,
-                momentum=0.9,
-            )
-        return inner_opt
-
     def step(self, batch, is_train: bool) -> Dict:
         """Runs a single meta-training step
 
@@ -440,21 +364,28 @@ class MetaReasonLMModule(MetaModule):
         print_outs = []
 
         for _, task in enumerate(batch):
-            train_features, dev_features, print_out = self.get_features(
-                task, is_train)
+            train_features, dev_features, print_out = get_features(
+                self.hparams.device,
+                task,
+                is_train,
+                self.hparams.inner_grad_accumulate
+            )
 
             with higher.innerloop_ctx(
                 self.model, inner_opt,
                 copy_initial_weights=False,
                 track_higher_grads=is_train
             ) as (fmodel, diffopt):
-                inner_track = {}
+                inner_track, inner_out_prev = {}, {}
+
                 for _, param in fmodel.named_parameters():
                     if not param.requires_grad:
                         param.requires_grad = True
+
                 if self.hparams.inner_verbose:
                     inner_out_prev = self.inner_loop_end(
                         train_features, print_out, fmodel, is_train)
+
                 self.inner_loop_step(
                     train_features, print_out, fmodel, diffopt)
                 inner_out_post = self.inner_loop_end(
@@ -462,24 +393,11 @@ class MetaReasonLMModule(MetaModule):
                 inner_loss += inner_out_post["loss"].detach().cpu()
 
                 if self.hparams.inner_verbose:
-                    diff = inner_out_post["loss"].detach() - \
-                        inner_out_prev["loss"].detach()
+                    diff = self._inner_loss_difference(
+                        inner_out_prev, inner_out_post, inner_track)
                     inner_loss_diff += diff
-                    inner_track["inner_loss_diff"] = [diff]
-                    inner_track["inner_loss"] = [inner_out_post["loss"].item()]
-
-                if self.hparams.inner_verbose:
-                    token_loss = []
-                    prev_token_loss = inner_out_prev["token_loss"]
-                    post_token_loss = inner_out_post["token_loss"]
-                    for (prev_loss, post_loss) in zip(prev_token_loss, post_token_loss):
-                        for token in post_loss:
-                            curr = post_loss[token]
-                            prev = prev_loss[token]
-                            diff = curr - prev
-                            post_loss[token] = (curr, diff)
-                        token_loss.append(post_loss)
-                    inner_track["token_loss"] = [token_loss]
+                    self._inner_token_loss(
+                        inner_out_prev, inner_out_post, inner_track)
 
                 if is_train:
                     dev_out = fmodel(dev_features, print_out)
@@ -504,6 +422,26 @@ class MetaReasonLMModule(MetaModule):
             output_dict["print_out"] = print_outs
 
         return output_dict
+
+    def _inner_token_loss(self, inner_out_prev, inner_out_post, inner_track):
+        token_loss = []
+        prev_token_loss = inner_out_prev["token_loss"]
+        post_token_loss = inner_out_post["token_loss"]
+        for (prev_loss, post_loss) in zip(prev_token_loss, post_token_loss):
+            for token in post_loss:
+                curr = post_loss[token]
+                prev = prev_loss[token]
+                diff = curr - prev
+                post_loss[token] = (curr, diff)
+            token_loss.append(post_loss)
+        inner_track["token_loss"] = [token_loss]
+
+    def _inner_loss_difference(self, inner_out_prev, inner_out_post, inner_track):
+        diff = inner_out_post["loss"].detach() - \
+            inner_out_prev["loss"].detach()
+        inner_track["inner_loss_diff"] = [diff]
+        inner_track["inner_loss"] = [inner_out_post["loss"].item()]
+        return diff
 
     def training_step(self, batch, batch_idx) -> Dict:
         """Runs a single training step
@@ -564,15 +502,47 @@ class MetaReasonLMModule(MetaModule):
         return test_loss, outputs
 
 
+class KGMAMLModule(MetaReasonLMModule):
+    def __init__(self, config):
+        super().__init__(config)
+
+    def config_inner_optimizer(self):
+        """Configures the inner loop optimizer
+
+        :param model_params: the model parameters
+        :rtype: torch.optim
+        :returns: the optimizer
+        """
+        model_params = []
+        for _, param in self.model.named_parameters():
+            if param.requires_grad:
+                model_params.append(
+                    {"params": param, "lr": self.hparams.inner_lr})
+
+        if self.hparams.inner_opt == "adam":
+            inner_opt = torch.optim.AdamW(
+                model_params,
+                amsgrad=False
+            )
+        else:
+            inner_opt = torch.optim.SGD(
+                model_params,
+                momentum=0.9,
+            )
+        return inner_opt
+
+
 class MetaReasonPrefixLMModule(MetaReasonLMModule):
     def __init__(self, config):
         super().__init__(config)
 
         peft_config = PrefixTuningConfig(
             task_type=TaskType.CAUSAL_LM,
-            num_virtual_tokens=config.prefix_dim)
+            num_virtual_tokens=config.prefix_dim
+        )
         self.model.model = get_peft_model(
             self.model.model, peft_config)
+        self.lm_head = self.model.model.base_model.lm_head
 
         self.inner_lr_schedular_config(
             config.n_inner_iter,
@@ -588,6 +558,10 @@ class MetaReasonPrefixLMModule(MetaReasonLMModule):
             else:
                 self.model_params[name] = param
 
+        # for name, param in self.lm_head.named_parameters():
+        #     param.requires_grad = True
+        #     self.prefix_params[name] = param
+
         self.num_prefix_params = len(self.prefix_params)
         self.num_model_params = len(self.model_params)
 
@@ -595,6 +569,152 @@ class MetaReasonPrefixLMModule(MetaReasonLMModule):
             f"Number of prefix parameters: {self.num_prefix_params}")
         util_logger.info(
             f"Number of model parameters: {self.num_model_params}")
+
+    def set_model_params_grad(self, grad: bool = True):
+        for _, param in self.model_params.items():
+            param.requires_grad = grad
+
+    def set_prefix_params_grad(self, grad: bool = True):
+        for _, param in self.prefix_params.items():
+            param.requires_grad = grad
+
+    def config_inner_optimizer(self):
+        """Configures the inner loop optimizer
+
+        :param model_params: the model parameters
+        :rtype: torch.optim
+        :returns: the optimizer
+        """
+        model_params = []
+        for _, param in self.prefix_params.items():
+            model_params.append(
+                {"params": param, "lr": self.hparams.inner_lr})
+
+        inner_opt = torch.optim.AdamW(
+            model_params,
+            amsgrad=False
+        )
+        return inner_opt
+
+    def configure_optimizers(self):
+        """Setup the main optimizer
+
+        :returns: the main optimizer
+        """
+
+        parameters_prefix = [
+            p for _, p in self.prefix_params.items()
+        ]
+
+        optimizer_grouped_parameters = [
+            {
+                "params": parameters_prefix,
+                "weight_decay": self.hparams.weight_decay
+            }
+        ]
+
+        optimizer = AdamW(
+            optimizer_grouped_parameters,
+            lr=self.hparams.learning_rate,
+            eps=self.hparams.adam_epsilon
+        )
+        self.opt = optimizer
+        scheduler = self.get_lr_scheduler()
+
+        return [optimizer], [scheduler]
+
+
+class MetaReasonLoraLMModule(MetaReasonLMModule):
+    def __init__(self, config):
+        super().__init__(config)
+
+        peft_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            inference_mode=False, r=8,
+            lora_alpha=32, lora_dropout=0.1
+        )
+        self.model.model = get_peft_model(
+            self.model.model, peft_config)
+        self.lm_head = self.model.model.base_model.lm_head
+
+        self.inner_lr_schedular_config(
+            config.n_inner_iter,
+            config.inner_lr
+        )
+
+        self.lora_params = {}
+        self.model_params = {}
+
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                self.lora_params[name] = param
+            else:
+                self.model_params[name] = param
+
+        # for name, param in self.lm_head.named_parameters():
+        #     param.requires_grad = True
+        #     self.prefix_params[name] = param
+
+        self.num_prefix_params = len(self.lora_params)
+        self.num_model_params = len(self.model_params)
+
+        util_logger.info(
+            f"Number of prefix parameters: {self.num_prefix_params}")
+        util_logger.info(
+            f"Number of model parameters: {self.num_model_params}")
+
+    def set_model_params_grad(self, grad: bool = True):
+        for _, param in self.model_params.items():
+            param.requires_grad = grad
+
+    def set_prefix_params_grad(self, grad: bool = True):
+        for _, param in self.lora_params.items():
+            param.requires_grad = grad
+
+    def config_inner_optimizer(self):
+        """Configures the inner loop optimizer
+
+        :param model_params: the model parameters
+        :rtype: torch.optim
+        :returns: the optimizer
+        """
+        model_params = []
+        for _, param in self.lora_params.items():
+            model_params.append(
+                {"params": param, "lr": self.hparams.inner_lr})
+
+        inner_opt = torch.optim.AdamW(
+            model_params,
+            amsgrad=False
+        )
+        return inner_opt
+
+    def configure_optimizers(self):
+        """Setup the main optimizer
+
+        :returns: the main optimizer
+        """
+
+        parameters_prefix = [
+            p for _, p in self.lora_params.items()
+        ]
+
+        optimizer_grouped_parameters = [
+            {
+                "params": parameters_prefix,
+                "weight_decay": self.hparams.weight_decay
+            }
+        ]
+
+        optimizer = AdamW(
+            optimizer_grouped_parameters,
+            lr=self.hparams.learning_rate,
+            eps=self.hparams.adam_epsilon
+        )
+        self.opt = optimizer
+        scheduler = self.get_lr_scheduler()
+
+        return [optimizer], [scheduler]
 
 
 class CausalLMModule(MetaModule):
@@ -710,3 +830,58 @@ class CausalLMModule(MetaModule):
     def test_epoch_logic(self, outputs):
         test_loss = torch.stack([x["loss"] for x in outputs]).mean()
         return test_loss, outputs
+
+
+def batch_split(row):
+    inner_loader = DataLoader(
+        row, batch_size=4, shuffle=False)
+    splited = [inner_batch for inner_batch in inner_loader]
+    return splited
+
+
+def batch_aggregate(rb):
+    inputs, masks, types = rb[0], rb[1], rb[2]
+    train_feature = {
+        "input_ids": inputs,
+        "attention_mask": masks,
+        "token_type_ids": types,
+        "evaluate": False
+    }
+    return train_feature
+
+
+def get_features(device, batch, is_train: bool, accumulate: bool):
+    """Get features from batch"""
+    print_out = batch["print_out"]
+    train_features = {
+        "input_ids": batch["train_input_ids"].to(
+            torch.device(device)),
+        "attention_mask": batch["train_attention_mask"].to(
+            torch.device(device)),
+        "token_type_ids": batch["train_token_type_ids"].to(
+            torch.device(device)),
+        "evaluate": False
+    }
+
+    if "train_labels" in batch:
+        train_features["labels"] = batch["train_labels"].to(
+            torch.device(device))
+
+    dev_features = {
+        "input_ids": batch["input_ids"].to(
+            torch.device(device)),
+        "attention_mask": batch["attention_mask"].to(
+            torch.device(device)),
+        "token_type_ids": batch["token_type_ids"].to(
+            torch.device(device)),
+        "evaluate": not is_train
+    }
+
+    if accumulate:
+        data_keys = ["train_input_ids",
+                     "train_attention_mask", "train_token_type_ids"]
+        rebatch = [batch_split(batch[key]) for key in data_keys]
+        train_features = [
+            batch_aggregate(rb) for rb in zip(*rebatch)]
+
+    return train_features, dev_features, print_out
