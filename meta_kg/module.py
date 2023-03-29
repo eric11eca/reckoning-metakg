@@ -143,44 +143,6 @@ class MetaModule(pl.LightningModule):
                 prog_bar=True
             )
 
-    def configure_optimizers(self):
-        """Setup the main optimizer
-
-        :returns: the main optimizer
-        """
-        no_decay = ["bias", "LayerNorm.weight"]
-        parameters_first = [
-            p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay)
-        ]
-        parameters_sec = [
-            p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay)
-        ]
-
-        optimizer_grouped_parameters = [
-            {
-                "params": parameters_first,
-                "weight_decay": self.hparams.weight_decay
-            },
-            {
-                "params": parameters_sec,
-                "weight_decay": 0.0
-            },
-            {
-                "params": self.inner_schedular.parameters(),
-                "weight_decay": 0.0
-            }
-        ]
-
-        optimizer = AdamW(
-            optimizer_grouped_parameters,
-            lr=self.hparams.learning_rate,
-            eps=self.hparams.adam_epsilon
-        )
-        self.opt = optimizer
-        scheduler = self.get_lr_scheduler()
-
-        return [optimizer], [scheduler]
-
     def get_lr_scheduler(self):
         """Sets up the optimizer learning rate scheduler
 
@@ -531,8 +493,46 @@ class KGMAMLModule(MetaReasonLMModule):
             )
         return inner_opt
 
+    def configure_optimizers(self):
+        """Setup the main optimizer
 
-class MetaReasonPrefixLMModule(MetaReasonLMModule):
+        :returns: the main optimizer
+        """
+        no_decay = ["bias", "LayerNorm.weight"]
+        parameters_first = [
+            p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay)
+        ]
+        parameters_sec = [
+            p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay)
+        ]
+
+        optimizer_grouped_parameters = [
+            {
+                "params": parameters_first,
+                "weight_decay": self.hparams.weight_decay
+            },
+            {
+                "params": parameters_sec,
+                "weight_decay": 0.0
+            },
+            {
+                "params": self.inner_schedular.parameters(),
+                "weight_decay": 0.0
+            }
+        ]
+
+        optimizer = AdamW(
+            optimizer_grouped_parameters,
+            lr=self.hparams.learning_rate,
+            eps=self.hparams.adam_epsilon
+        )
+        self.opt = optimizer
+        scheduler = self.get_lr_scheduler()
+
+        return [optimizer], [scheduler]
+
+
+class KGMAMLPrefixModule(MetaReasonLMModule):
     def __init__(self, config):
         super().__init__(config)
 
@@ -542,25 +542,24 @@ class MetaReasonPrefixLMModule(MetaReasonLMModule):
         )
         self.model.model = get_peft_model(
             self.model.model, peft_config)
-        self.lm_head = self.model.model.base_model.lm_head
-
-        self.inner_lr_schedular_config(
-            config.n_inner_iter,
-            config.inner_lr
-        )
 
         self.prefix_params = {}
         self.model_params = {}
-
         for name, param in self.model.named_parameters():
             if param.requires_grad:
                 self.prefix_params[name] = param
             else:
                 self.model_params[name] = param
 
-        # for name, param in self.lm_head.named_parameters():
-        #     param.requires_grad = True
-        #     self.prefix_params[name] = param
+        self.lm_head = self.model.model.base_model.lm_head
+        for name, param in self.lm_head.named_parameters():
+            param.requires_grad = True
+            self.prefix_params[name] = param
+
+        self.inner_lr_schedular_config(
+            config.n_inner_iter,
+            config.inner_lr
+        )
 
         self.num_prefix_params = len(self.prefix_params)
         self.num_model_params = len(self.model_params)
@@ -624,36 +623,35 @@ class MetaReasonPrefixLMModule(MetaReasonLMModule):
         return [optimizer], [scheduler]
 
 
-class MetaReasonLoraLMModule(MetaReasonLMModule):
+class KGMAMLLoraModule(MetaReasonLMModule):
     def __init__(self, config):
         super().__init__(config)
 
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
-            inference_mode=False, r=8,
+            inference_mode=False, r=32,
             lora_alpha=32, lora_dropout=0.1
         )
         self.model.model = get_peft_model(
             self.model.model, peft_config)
-        self.lm_head = self.model.model.base_model.lm_head
-
-        self.inner_lr_schedular_config(
-            config.n_inner_iter,
-            config.inner_lr
-        )
 
         self.lora_params = {}
         self.model_params = {}
-
         for name, param in self.model.named_parameters():
             if param.requires_grad:
                 self.lora_params[name] = param
             else:
                 self.model_params[name] = param
 
-        # for name, param in self.lm_head.named_parameters():
-        #     param.requires_grad = True
-        #     self.prefix_params[name] = param
+        self.lm_head = self.model.model.base_model.lm_head
+        for name, param in self.lm_head.named_parameters():
+            param.requires_grad = True
+            self.lora_params[name] = param
+
+        self.inner_lr_schedular_config(
+            config.n_inner_iter,
+            config.inner_lr
+        )
 
         self.num_prefix_params = len(self.lora_params)
         self.num_model_params = len(self.model_params)
@@ -695,13 +693,23 @@ class MetaReasonLoraLMModule(MetaReasonLMModule):
         :returns: the main optimizer
         """
 
-        parameters_prefix = [
+        parameters_lora = [
             p for _, p in self.lora_params.items()
         ]
 
+        # parameters_
+
+        # no_decay = ["bias", "LayerNorm.weight"]
+        # parameters_first = [
+        #     p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay)
+        # ]
+        # parameters_sec = [
+        #     p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay)
+        # ]
+
         optimizer_grouped_parameters = [
             {
-                "params": parameters_prefix,
+                "params": parameters_lora,
                 "weight_decay": self.hparams.weight_decay
             }
         ]
@@ -830,6 +838,44 @@ class CausalLMModule(MetaModule):
     def test_epoch_logic(self, outputs):
         test_loss = torch.stack([x["loss"] for x in outputs]).mean()
         return test_loss, outputs
+
+    def configure_optimizers(self):
+        """Setup the main optimizer
+
+        :returns: the main optimizer
+        """
+        no_decay = ["bias", "LayerNorm.weight"]
+        parameters_first = [
+            p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay)
+        ]
+        parameters_sec = [
+            p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay)
+        ]
+
+        optimizer_grouped_parameters = [
+            {
+                "params": parameters_first,
+                "weight_decay": self.hparams.weight_decay
+            },
+            {
+                "params": parameters_sec,
+                "weight_decay": 0.0
+            },
+            {
+                "params": self.inner_schedular.parameters(),
+                "weight_decay": 0.0
+            }
+        ]
+
+        optimizer = AdamW(
+            optimizer_grouped_parameters,
+            lr=self.hparams.learning_rate,
+            eps=self.hparams.adam_epsilon
+        )
+        self.opt = optimizer
+        scheduler = self.get_lr_scheduler()
+
+        return [optimizer], [scheduler]
 
 
 def batch_split(row):
