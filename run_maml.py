@@ -1,3 +1,4 @@
+import os
 import logging
 
 from meta_kg.train import setup_trainer
@@ -5,9 +6,9 @@ from meta_kg.utils.wandb_utils import setup_wandb
 
 from meta_kg.module import (
     CausalLMModule,
-    MetaReasonLMModule,
-    MetaReasonPrefixLMModule,
-    MetaReasonLoraLMModule
+    KGMAMLModule,
+    KGMAMLPrefixModule,
+    KGMAMLLoraModule
 )
 
 util_logger = logging.getLogger(
@@ -15,10 +16,12 @@ util_logger = logging.getLogger(
 )
 
 MODULE_DICT = {
-    "all": MetaReasonLMModule,
-    "prefix": MetaReasonPrefixLMModule,
-    "lora": MetaReasonLoraLMModule,
+    "all": KGMAMLModule,
+    "prefix": KGMAMLPrefixModule,
+    "lora": KGMAMLLoraModule,
 }
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 def run(args):
