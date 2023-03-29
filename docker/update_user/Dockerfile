@@ -1,5 +1,7 @@
 FROM eric11eca/meta_kg_7:latest
 
+RUN pip3 install peft
+
 ARG DUMMY=unknown
 RUN DUMMY=${DUMMY}
 RUN mkdir -p /nlp
@@ -13,4 +15,5 @@ COPY run_gpt2.sh /nlp/
 
 ENV WANDB_API_KEY 9edee5b624841e10c88fcf161d8dc54d4efbee29
 
-ENTRYPOINT ["./run_eval.sh"]
+# ENTRYPOINT ["./run_eval.sh"]
+CMD ["/bin/bash"]

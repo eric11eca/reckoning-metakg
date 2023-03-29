@@ -52,8 +52,11 @@ RUN DUMMY=${DUMMY}
 COPY meta_kg/ /nlp/meta_kg/
 COPY run_maml.py /nlp/
 COPY cli_maml.py /nlp/
+COPY peft /nlp/peft/
 COPY run_gpt2.sh /nlp/
 COPY upload_wandb_data.sh /nlp/
+
+RUN pip3 install accelerate
 
 ENV WANDB_API_KEY 9edee5b624841e10c88fcf161d8dc54d4efbee29
 
