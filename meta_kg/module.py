@@ -1,6 +1,7 @@
 import torch
 import higher
 import logging
+import numpy as np
 import pytorch_lightning as pl
 
 from typing import Dict
@@ -286,8 +287,12 @@ class MetaReasonLMModule(MetaModule):
             train_loss = train_out["loss"]
             if not train_loss.requires_grad:
                 train_loss.requires_grad = True
+            if self.hparams.inner_mode == "all":
+                named_params = self.model.named_parameters()
+            else:
+                named_params = self.trainable_params.items()
             self.inner_schedular.step(
-                diffopt, self.model.named_parameters(), iter)
+                diffopt, named_params, iter)
             diffopt.step(train_loss)
 
     def inner_loop_end(self, features, print_out, fmodel, is_train: bool) -> Dict:
@@ -629,37 +634,35 @@ class KGMAMLLoraModule(MetaReasonLMModule):
 
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
-            inference_mode=False, r=32,
+            inference_mode=False, r=16,
             lora_alpha=32, lora_dropout=0.1
         )
         self.model.model = get_peft_model(
             self.model.model, peft_config)
 
-        self.lora_params = {}
-        self.model_params = {}
+        self.trainable_params = {}
+        self.frozen_params = {}
         for name, param in self.model.named_parameters():
             if param.requires_grad:
-                self.lora_params[name] = param
+                self.trainable_params[name] = param
             else:
-                self.model_params[name] = param
+                self.frozen_params[name] = param
 
-        self.lm_head = self.model.model.base_model.lm_head
-        for name, param in self.lm_head.named_parameters():
-            param.requires_grad = True
-            self.lora_params[name] = param
+        for name, param in self.model.named_parameters():
+            if "lm_head" in name:
+                param.requires_grad = True
+                self.trainable_params[name] = param
+
+        for name, param in self.model.named_parameters():
+            if np.any([x in name for x in ['.34.', '.35.']]):
+                print(f"Enable training: {name}")
+                param.requires_grad = True
+                self.trainable_params[name] = param
 
         self.inner_lr_schedular_config(
             config.n_inner_iter,
             config.inner_lr
         )
-
-        self.num_prefix_params = len(self.lora_params)
-        self.num_model_params = len(self.model_params)
-
-        util_logger.info(
-            f"Number of prefix parameters: {self.num_prefix_params}")
-        util_logger.info(
-            f"Number of model parameters: {self.num_model_params}")
 
     def set_model_params_grad(self, grad: bool = True):
         for _, param in self.model_params.items():
@@ -677,7 +680,7 @@ class KGMAMLLoraModule(MetaReasonLMModule):
         :returns: the optimizer
         """
         model_params = []
-        for _, param in self.lora_params.items():
+        for _, param in self.trainable_params.items():
             model_params.append(
                 {"params": param, "lr": self.hparams.inner_lr})
 
@@ -692,25 +695,26 @@ class KGMAMLLoraModule(MetaReasonLMModule):
 
         :returns: the main optimizer
         """
-
-        parameters_lora = [
-            p for _, p in self.lora_params.items()
+        no_decay = ["bias", "LayerNorm.weight"]
+        parameters_first = [
+            p for n, p in self.trainable_params.items() if not any(nd in n for nd in no_decay)
         ]
-
-        # parameters_
-
-        # no_decay = ["bias", "LayerNorm.weight"]
-        # parameters_first = [
-        #     p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay)
-        # ]
-        # parameters_sec = [
-        #     p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay)
-        # ]
+        parameters_sec = [
+            p for n, p in self.trainable_params.items() if any(nd in n for nd in no_decay)
+        ]
 
         optimizer_grouped_parameters = [
             {
-                "params": parameters_lora,
+                "params": parameters_first,
                 "weight_decay": self.hparams.weight_decay
+            },
+            {
+                "params": parameters_sec,
+                "weight_decay": 0.0
+            },
+            {
+                "params": self.inner_schedular.parameters(),
+                "weight_decay": 0.0
             }
         ]
 
