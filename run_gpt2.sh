@@ -1,29 +1,32 @@
 #!/bin/bash
 
-DATASET="owa_proof_2_hop"
+DATASET="owa_proof_5_hop"
 DATASET_TYPE="proofwriter"
 INPUT_FORMAT="lm"
 MODEL_TYPE="gpt2"
-MODEL_NAME_OR_PATH="gpt2-large"
-TRAIN_BATCH_SIZE=4
-PREDICT_BATCH_SIZE=1
-INNER_MODE="lora"
+MODEL_NAME_OR_PATH="gpt2"
+TRAIN_BATCH_SIZE=2
+PREDICT_BATCH_SIZE=2
+INNER_MODE="all"
 GD_ACCUMULATE_STPES=1
-INNER_STEPS=4
+INNER_STEPS=2
 INNER_OPT="adam"
 #POSTFIX="no-facts"
 #POSTFIX="baseline"
 PREFIX_DIM=128
+LORA_R=16
 LOAD_ORDER="norm"
-POSTFIX="multi-lora"
+POSTFIX="1step"
 CHEKPOINT="./output/model.ckpt"
+
+# MODEL_NAME_OR_PATH="EleutherAI/gpt-j-6B"
  
 echo "Downloading data..."
 mkdir -p data/${DATASET}
 wandb artifact get epfl_nlp_phd/data-collection/${DATASET}:latest --root data/${DATASET}
 
-echo "Downloading model..."
-wandb artifact get epfl_nlp_phd/meta-knowledge/proof_2_hop_lora:best_k --root ./output/
+# echo "Downloading model..."
+# wandb artifact get epfl_nlp_phd/meta-knowledge/proof_2_hop_lora:best_k --root ./output/
 
 python cli_maml.py \
     --do_train \
@@ -45,8 +48,9 @@ python cli_maml.py \
     --wandb_checkpoint \
     --device_idx 0 \
     --prefix_dim ${PREFIX_DIM} \
+    --lora_r ${LORA_R} \
     --multi_task \
     --load_order ${LOAD_ORDER} \
-    --load_checkpoint ${CHEKPOINT} \
+    # --load_checkpoint ${CHEKPOINT} \
     # --max_data 2000 \
     # --freeze_partial

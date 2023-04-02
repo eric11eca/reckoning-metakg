@@ -65,6 +65,10 @@ def main():
                         help='order to load the facts')
     parser.add_argument("--prefix_dim", default=100, type=int,
                         help="Prefix dimension.")
+    parser.add_argument("--lora_alpha", default=32, type=float,
+                        help="LORA alpha.")
+    parser.add_argument("--lora_r", default=16, type=float,
+                        help="LORA attention number.")
 
     # Training-related parameters
     parser.add_argument("--fact_batch_size", default=8, type=int,
@@ -88,7 +92,7 @@ def main():
     parser.add_argument("--num_train_epochs", default=5, type=int,
                         help="Total number of training epochs to perform.")
     parser.add_argument('--callback_monitor', type=str, default='val_acc')
-    parser.add_argument('--patience', type=int, default=5)
+    parser.add_argument('--patience', type=int, default=10)
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--input_format', type=str, default='lm')
     parser.add_argument('--device_idx', type=int, default=0)

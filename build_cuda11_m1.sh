@@ -1,4 +1,4 @@
-NUM=1
+NUM=step2_5
 
 CURRENT=${NUM}
 IMAGE_NAME=meta_kg
@@ -9,7 +9,9 @@ IMAGE=$IMAGE_NAME_$USER-$GIT_HASH
 IM_NAME=${IMAGE_NAME}_${NUM}
 
 echo "Building $IM_NAME"
-docker buildx build --build-arg DUMMY='cloud' --platform linux/amd64 --load -f $DOCKERFILE_NAME -t $IM_NAME --cache-from type=local,src=../../.docker_cache --cache-to type=local,mode=max,dest=../../.docker_cache .
+# docker buildx build --build-arg DUMMY='cloud' --platform linux/amd64 --load -f $DOCKERFILE_NAME -t $IM_NAME --cache-from type=local,src=../../.docker_cache --cache-to type=local,mode=max,dest=../../.docker_cache .
+
+docker build -f $DOCKERFILE_NAME . -t $IM_NAME --build-arg DUMMY='cloud' --platform linux/amd64
 
 echo "Pushing $IM_NAME to Harbor"
 docker tag $IM_NAME eric11eca/$IM_NAME

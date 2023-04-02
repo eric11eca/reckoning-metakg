@@ -5,10 +5,10 @@ CLUSTER_USER_ID=254670
 CLUSTER_GROUP_NAME=NLP-StaffU
 CLUSTER_GROUP_ID=11131
 
-MY_IMAGE="eric11eca/meta_kg_7"
+MY_IMAGE="eric11eca/meta_kg_step2_5"
 
-arg_job_prefix="meta-lora"
-arg_job_suffix="proof2h"
+arg_job_prefix="meta-kg"
+arg_job_suffix="proof5-s2"
 arg_job_name="$arg_job_prefix-$arg_job_suffix"
 
 command=$1
@@ -19,7 +19,7 @@ if [ "$command" == "run" ]; then
 	runai submit $arg_job_name \
 		-i $MY_IMAGE \
 		--gpu 1 \
-		# --node-type G10
+		--node-type G10
 		
 		# -e CLUSTER_USER=$CLUSTER_USER \
 		# -e CLUSTER_USER_ID=$CLUSTER_USER_ID \
