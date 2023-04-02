@@ -649,15 +649,15 @@ class KGMAMLLoraModule(MetaReasonLMModule):
                 self.frozen_params[name] = param
 
         for name, param in self.model.named_parameters():
-            if "lm_head" in name:
+            if np.any([x in name for x in ['lm_head', 'wpe', 'wte']]):
                 param.requires_grad = True
                 self.trainable_params[name] = param
 
-        for name, param in self.model.named_parameters():
-            if np.any([x in name for x in ['.34.', '.35.']]):
-                print(f"Enable training: {name}")
-                param.requires_grad = True
-                self.trainable_params[name] = param
+        # for name, param in self.model.named_parameters():
+        #     if np.any([x in name for x in ['.33', '.34.', '.35.']]):
+        #         print(f"Enable training: {name}")
+        #         param.requires_grad = True
+        #         self.trainable_params[name] = param
 
         self.inner_lr_schedular_config(
             config.n_inner_iter,
