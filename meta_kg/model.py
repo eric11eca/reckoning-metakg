@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from transformers import (
     AutoConfig,
     AutoTokenizer,
-    AutoModelForSeq2SeqLM,
     GPT2LMHeadModel,
     AutoModelForCausalLM,
     GenerationConfig
@@ -23,7 +22,6 @@ from transformers import (
 from meta_kg.utils.py_io import write_json
 
 model_class_registry = {
-    "t5": AutoModelForSeq2SeqLM,
     "gpt2": GPT2LMHeadModel,
     "gptj": AutoModelForCausalLM,
     "gpt-neo": AutoModelForCausalLM,
@@ -49,6 +47,13 @@ class CausalLM(nn.Module):
             if np.any([x in name for x in [
                 '.0.', '.1.', '.2.', '.3.',
                 '.4.', '.5.', '.6.', '.7.',
+                '.8.', '.9.', '.10.', '.11.',
+                '.12.', '.13.', '.14.', '.15.',
+                '.16.', '.17.', '.18.', '.19.',
+                '.20.', '.21.', '.22.', '.23.',
+                '.24.', '.25.', '.26.', '.27.',
+                '.28.', '.29.', '.30.', '.31.',
+                '.32.'
             ]]):
                 print(f"Freezing {name}")
                 param.requires_grad = False

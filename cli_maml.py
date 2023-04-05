@@ -69,6 +69,8 @@ def main():
                         help="LORA alpha.")
     parser.add_argument("--lora_r", default=16, type=float,
                         help="LORA attention number.")
+    parser.add_argument("--dyna_lr", action='store_true', default=False,
+                        help="Enable dynamic learning rate in the inner loop.")
 
     # Training-related parameters
     parser.add_argument("--fact_batch_size", default=8, type=int,
