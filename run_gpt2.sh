@@ -1,7 +1,7 @@
 #!/bin/bash
 
-DATASET="owa_proof_5_hop"
-DATASET_TYPE="proofwriter"
+DATASET="clutrr_6_hop"
+DATASET_TYPE="clutrr"
 INPUT_FORMAT="lm"
 MODEL_TYPE="gpt2"
 MODEL_NAME_OR_PATH="gpt2"
@@ -9,14 +9,14 @@ TRAIN_BATCH_SIZE=2
 PREDICT_BATCH_SIZE=2
 INNER_MODE="all"
 GD_ACCUMULATE_STPES=1
-INNER_STEPS=2
+INNER_STEPS=5
 INNER_OPT="adam"
 #POSTFIX="no-facts"
 #POSTFIX="baseline"
 PREFIX_DIM=128
 LORA_R=16
 LOAD_ORDER="norm"
-POSTFIX="1step"
+POSTFIX="no-dynalr"
 CHEKPOINT="./output/model.ckpt"
 
 # MODEL_NAME_OR_PATH="EleutherAI/gpt-j-6B"
