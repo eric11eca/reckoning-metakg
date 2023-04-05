@@ -278,21 +278,19 @@ class MetaReasonLMModule(MetaModule):
         :returns: dictionary that includes loss
         """
         for iter in range(self.hparams.n_inner_iter):
-            try:
-                train_out = fmodel(features, print_out, is_inner=True)
-            except:
-                print("inner loop error")
-                print(print_out)
-                continue
+            train_out = fmodel(features, print_out, is_inner=True)
             train_loss = train_out["loss"]
             if not train_loss.requires_grad:
                 train_loss.requires_grad = True
+
             if self.hparams.inner_mode == "all":
                 named_params = self.model.named_parameters()
             else:
                 named_params = self.trainable_params.items()
-            self.inner_schedular.step(
-                diffopt, named_params, iter)
+
+            if self.hparams.dyna_lr:
+                self.inner_schedular.step(
+                    diffopt, named_params, iter)
             diffopt.step(train_loss)
 
     def inner_loop_end(self, features, print_out, fmodel, is_train: bool) -> Dict:
