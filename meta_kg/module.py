@@ -9,12 +9,12 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from transformers import get_linear_schedule_with_warmup
 
-from peft import (
-    get_peft_model,
-    PrefixTuningConfig,
-    LoraConfig,
-    TaskType
-)
+# from peft import (
+#     get_peft_model,
+#     PrefixTuningConfig,
+#     LoraConfig,
+#     TaskType
+# )
 
 from meta_kg.dataset import MetaKnowledgeDataset
 from meta_kg.model import MetaReasonLM
@@ -176,7 +176,7 @@ class MetaModule(pl.LightningModule):
             self.hparams,
             self.tokenizer,
             self.hparams.train_dir,
-            data_type="test",
+            data_type="dev",
             is_training=False
         )
         self.test_data = MetaKnowledgeDataset(
@@ -784,7 +784,7 @@ class CausalLMModule(MetaModule):
         :rtype: dict
         :returns: dictionary that includes loss
         """
-        output_dict = self.base_step(batch, is_train=True)
+        output_dict = self.step(batch, is_train=True)
         self.log(
             f'batch_train_loss',
             output_dict["train_loss"],
@@ -803,7 +803,7 @@ class CausalLMModule(MetaModule):
         :rtype: dict
         :returns: dictionary that includes loss
         """
-        output_dict = self.base_step(batch, is_train=False)
+        output_dict = self.step(batch, is_train=False)
         assert len(output_dict["print_out"]["gen_out"]) == len(
             output_dict["print_out"]["answer"])
         self.log(
@@ -845,10 +845,6 @@ class CausalLMModule(MetaModule):
             {
                 "params": parameters_sec,
                 "weight_decay": 0.0
-            },
-            {
-                "params": self.inner_schedular.parameters(),
-                "weight_decay": 0.0
             }
         ]
 
@@ -883,6 +879,7 @@ def batch_aggregate(rb):
 
 def get_features(device, batch, is_train: bool, accumulate: bool):
     """Get features from batch"""
+    print(batch)
     print_out = batch["print_out"]
     train_features = {
         "input_ids": batch["train_input_ids"].to(
