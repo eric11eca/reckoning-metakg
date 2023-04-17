@@ -1,5 +1,10 @@
 import os
 import logging
+# import hydra
+
+# from pprint import pprint
+# from typing import Optional
+# from omegaconf import DictConfig, OmegaConf
 
 from meta_kg.train import setup_trainer
 from meta_kg.utils.wandb_utils import setup_wandb
@@ -63,3 +68,13 @@ def run(args):
                 config=args
             )
             trainer.fit(model)
+
+
+# @hydra.main(version_base="1.3", config_path="config", config_name="run.yaml")
+# def main(cfg: DictConfig) -> Optional[float]:
+#     module_params = OmegaConf.to_container(cfg, resolve=True)
+#     pprint(module_params)
+
+
+# if __name__ == "__main__":
+#     main()
