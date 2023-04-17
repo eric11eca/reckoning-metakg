@@ -45,23 +45,6 @@ class MetaModule(pl.LightningModule):
         self.validation_step_outputs = []
         self.test_step_outputs = []
 
-        metadata = {
-            "task": config.dataset,
-            "model": config.model_name_or_path,
-            "model_type": config.model_type,
-            "input_format": config.input_format,
-            "inner_lr": config.inner_lr,
-            "n_inner_iter": config.n_inner_iter,
-            "learning_rate": config.learning_rate,
-            "baseline": config.baseline,
-            "no_facts": config.no_facts,
-            "random_facts": config.random_facts,
-            "wandb_name": config.wandb_name,
-            "gpu_id": config.device_idx,
-        }
-
-        write_json(metadata, f"{config.run_dir}/metadata.json")
-
     def on_train_epoch_end(self):
         """Called at the end of the training epoch
 
