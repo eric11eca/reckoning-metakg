@@ -130,22 +130,16 @@ class ClutrrDataReader(DataReader):
         else:
             qa_pairs.append([f"{prefix}, {question}", answer])
 
-        facts = []
-        for item in qa_pairs:
-            question = item[0]
-            question = question.replace("?", "")
-            if args.baseline:
-                facts.append([fact for fact in story])
-                if args.multi_task:
-                    recalls = [f"{fact[0]} {fact[1]}" for fact in story]
-                    item[1] = f"{item[1]} because {','.join(recalls)}"
-            else:
-                facts.append([f"fact_{i}: {fact}" for i,
-                             fact in enumerate(story)])
-                if args.multi_task:
-                    item[1] = f"{item[1]} because {','.join(story)}"
+        if args.multi_task:
+            for item in qa_pairs:
+                item[1] = f"{item[1]} because {','.join(story)}"
+        if not args.baseline:
+            facts =[f"fact_{i}: {fact}" for i, fact in enumerate(story)]
+        else:
+            facts = story
 
-        return [{"guid": guid, "qa_pairs": [qa_pairs[i]], "facts": facts[i]} for i in range(len(qa_pairs))]
+        batch = [{"guid": guid, "qa_pairs": [item], "facts": facts} for item in qa_pairs]
+        return batch
 
 
 class FolioDataReader(DataReader):
@@ -372,18 +366,9 @@ class MetaDataLoader():
         eos = self.tokenizer.eos_token
         bos = self.tokenizer.bos_token
 
-        if isinstance(batch[0]["facts"], tuple):
-            facts_batch = [
-                "\n".join([f"{fact[0]} {fact[1]}" for fact in data['facts']]) for data in batch]
-        else:
-            facts_batch = [
-                "\n".join([fact for fact in data['facts']]) for data in batch]
-
+        facts_batch = ["\n".join([fact for fact in data['facts']]) for data in batch]
         questions = [f"{data['qa_pairs'][0][0]}" for data in batch]
-        if len(batch[0]['qa_pairs'][0]) > 2:
-            answers = [data['qa_pairs'][0][2] for data in batch]
-        else:
-            answers = [data['qa_pairs'][0][1] for data in batch]
+        answers = [data['qa_pairs'][0][1] for data in batch]
 
         max_length = 0
         inputs = []
@@ -442,7 +427,6 @@ class MetaDataLoader():
         :param args: the global configuration
         """
         eos = self.tokenizer.eos_token
-        bos = self.tokenizer.bos_token
         batch_features = []
         for qa_data in batch:
             max_length = 0
@@ -451,7 +435,7 @@ class MetaDataLoader():
             train_attention_mask_batch = []
             train_token_type_ids_batch = []
             train_samples = []
-            for i, fact in enumerate(qa_data['facts']):
+            for fact in qa_data['facts']:
                 fact_pair = fact.split(':')
                 train_input_txt = f"{fact_pair[0].strip()}: "
                 train_output_txt = f"{fact_pair[1].strip()}"
@@ -478,10 +462,7 @@ class MetaDataLoader():
             dev_samples = []
             for qa_pair in qa_data["qa_pairs"]:
                 dev_input_txt = qa_pair[0]
-                if len(qa_pair) > 2:
-                    dev_output_txt = f"{qa_pair[2]}{eos}"
-                else:
-                    dev_output_txt = f"{qa_pair[1]}{eos}"
+                dev_output_txt = f"{qa_pair[1]}{eos}"
                 dev_samples.append(
                     (dev_input_txt, dev_output_txt.replace(eos, '')))
                 input_ids, attention_mask, token_type_ids = self._tensorize(

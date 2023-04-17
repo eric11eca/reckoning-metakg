@@ -19,6 +19,7 @@ MODULE_DICT = {
     "all": KGMAMLModule,
     "prefix": KGMAMLPrefixModule,
     "lora": KGMAMLLoraModule,
+    "baseline": CausalLMModule,
 }
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -27,6 +28,9 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 def run(args):
     util_logger.info('Setting up configuration for model runner...')
     setup_wandb(args)
+
+    if args.baseline:
+        args.inner_mode = 'baseline'
 
     module_class = MODULE_DICT.get(args.inner_mode, CausalLMModule)
     trainer = setup_trainer(args)
@@ -40,6 +44,9 @@ def run(args):
         else:
             model = module_class(args)
         trainer.fit(model)
+    
+    if args.baseline:
+        trainer.test(model)
 
     if args.do_eval:
         try:
