@@ -522,12 +522,12 @@ class KGMAMLPrefixModule(MetaReasonLMModule):
     def __init__(self, config):
         super().__init__(config)
 
-        peft_config = PrefixTuningConfig(
-            task_type=TaskType.CAUSAL_LM,
-            num_virtual_tokens=config.prefix_dim
-        )
-        self.model.model = get_peft_model(
-            self.model.model, peft_config)
+        # peft_config = PrefixTuningConfig(
+        #     task_type=TaskType.CAUSAL_LM,
+        #     num_virtual_tokens=config.prefix_dim
+        # )
+        # self.model.model = get_peft_model(
+        #     self.model.model, peft_config)
 
         self.prefix_params = {}
         self.model_params = {}
@@ -613,13 +613,13 @@ class KGMAMLLoraModule(MetaReasonLMModule):
     def __init__(self, config):
         super().__init__(config)
 
-        peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM,
-            inference_mode=False, r=16,
-            lora_alpha=32, lora_dropout=0.1
-        )
-        self.model.model = get_peft_model(
-            self.model.model, peft_config)
+        # peft_config = LoraConfig(
+        #     task_type=TaskType.CAUSAL_LM,
+        #     inference_mode=False, r=16,
+        #     lora_alpha=32, lora_dropout=0.1
+        # )
+        # self.model.model = get_peft_model(
+        #     self.model.model, peft_config)
 
         self.trainable_params = {}
         self.frozen_params = {}
