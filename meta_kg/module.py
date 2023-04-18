@@ -879,7 +879,6 @@ def batch_aggregate(rb):
 
 def get_features(device, batch, is_train: bool, accumulate: bool):
     """Get features from batch"""
-    print(batch)
     print_out = batch["print_out"]
     train_features = {
         "input_ids": batch["train_input_ids"].to(
