@@ -313,16 +313,15 @@ class MetaReasonLMModule(MetaModule):
 
         for _, task in enumerate(batch):
             train_features, dev_features, print_out = get_features(
-                self.hparams.device,
-                task,
-                is_train,
+                self.hparams.device, task, is_train,
                 self.hparams.inner_grad_accumulate
             )
 
+            higher_grads = is_train and not self.hparams.fomaml
             with higher.innerloop_ctx(
                 self.model, inner_opt,
                 copy_initial_weights=False,
-                track_higher_grads=is_train
+                track_higher_grads=higher_grads
             ) as (fmodel, diffopt):
                 inner_track, inner_out_prev = {}, {}
 
