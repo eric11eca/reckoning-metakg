@@ -4,6 +4,8 @@ import logging
 import numpy as np
 import pytorch_lightning as pl
 
+from omegaconf import DictConfig, OmegaConf
+
 from typing import Dict
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
@@ -36,7 +38,9 @@ class MetaModule(pl.LightningModule):
         """
         super().__init__()
         self.model_logger = logger
-        self.hparams.update(vars(config))
+        # self.hparams.update(vars(config))
+        self.hparams.update(
+            OmegaConf.to_container(config))
 
         self.global_trainin_step = 0
         self.global_epoch_counter = 0
