@@ -13,7 +13,7 @@ from pytorch_lightning.callbacks import (
 )
 from pytorch_lightning.callbacks.progress.rich_progress import RichProgressBarTheme
 
-from .utils.wandb_utils import init_wandb_logger
+from meta_kg.utils.wandb_utils import init_wandb_logger
 
 util_logger = logging.getLogger('meta_knowledge.trainer')
 
