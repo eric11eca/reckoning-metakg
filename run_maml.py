@@ -1,80 +1,77 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import os
+import time
 import logging
-# import hydra
+import hydra
+import random
+import numpy as np
+import torch
 
-# from pprint import pprint
-# from typing import Optional
-# from omegaconf import DictConfig, OmegaConf
+from typing import Optional
+from omegaconf import OmegaConf
+from omegaconf import DictConfig
+from omegaconf import open_dict
 
-from meta_kg.train import setup_trainer
-from meta_kg.utils.wandb_utils import setup_wandb
+from meta_kg.runner import run
 
-from meta_kg.module import (
-    CausalLMModule,
-    KGMAMLModule,
-    KGMAMLPrefixModule,
-    KGMAMLLoraModule
-)
+@hydra.main(version_base="1.3", config_path="./config", config_name="run.yaml")
+def main(args: DictConfig) -> Optional[float]:
+    config_dict = OmegaConf.to_container(args, resolve=True)
 
-util_logger = logging.getLogger(
-    'meta_knowledge.runner'
-)
+    if os.path.exists(args.output_dir) and os.listdir(args.output_dir):
+        print("Output directory () already exists and is not empty.")
+    
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir, exist_ok=True)
+    
+    log_filename = "{}log.txt".format("" if args.do_train else "eval_")
+    logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
+                        datefmt='%m/%d/%Y %H:%M:%S',
+                        level=logging.INFO,
+                        handlers=[logging.FileHandler(os.path.join(args.output_dir, log_filename)),
+                                  logging.StreamHandler()])
+    logger = logging.getLogger("meta_knowledge.run_maml")
+    logger.info(config_dict)
 
-MODULE_DICT = {
-    "all": KGMAMLModule,
-    "prefix": KGMAMLPrefixModule,
-    "lora": KGMAMLLoraModule,
-    "baseline": CausalLMModule,
-}
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
 
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    with open_dict(args):
+        args.device = f"cuda:{args.device_idx}" if torch.cuda.is_available(
+        ) else "cpu"
+    # if args.n_gpu > 0:
+    #     torch.cuda.manual_seed_all(args.seed)
 
-
-def run(args):
-    util_logger.info('Setting up configuration for model runner...')
-    setup_wandb(args)
-
-    if args.baseline:
-        args.inner_mode = 'baseline'
-
-    module_class = MODULE_DICT.get(args.inner_mode, CausalLMModule)
-    trainer = setup_trainer(args)
+    if not args.do_train and not args.do_eval:
+        raise ValueError(
+            "At least one of `do_train` or `do_eval` must be True.")
 
     if args.do_train:
-        if args.load_checkpoint is not None:
-            model = module_class.load_from_checkpoint(
-                args.load_checkpoint,
-                config=args
-            )
-        else:
-            model = module_class(args)
-        trainer.fit(model)
+        if not args.train_dir:
+            raise ValueError(
+                "If `do_train` is True, then `train_dir` must be specified.")
+        if not args.predict_dir:
+            raise ValueError(
+                "If `do_train` is True, then `predict_dir` must be specified.")
+
+    if args.do_eval and not args.predict_dir:
+        raise ValueError(
+            "If `do_eval` is True, then `predict_dir` must be specified.")
+
+    timestr = time.strftime("%Y%m%d-%H%M%S")
+    run_dir = f"{args.output_dir}/{timestr}"
+    os.makedirs(run_dir, exist_ok=True)
+
+    with open_dict(args):
+        args.run_dir = run_dir
     
-    if args.baseline:
-        trainer.test(model)
+    args.wandb_name = f"{args.dataset}-{args.wandb_name}"
+    run(args)
+    
 
-    if args.do_eval:
-        try:
-            assert args.load_checkpoint is not None
-        except AssertionError:
-            util_logger.error('Checkpoint path is not provided for evaluation')
-        if args.baseline:
-            model = CausalLMModule(args)
-            trainer.test(model, ckpt_path=args.load_checkpoint)
-        else:
-            # train on 1 datapoint for gradient enabling in validation
-            model = module_class.load_from_checkpoint(
-                args.load_checkpoint,
-                config=args
-            )
-            trainer.fit(model)
-
-
-# @hydra.main(version_base="1.3", config_path="config", config_name="run.yaml")
-# def main(cfg: DictConfig) -> Optional[float]:
-#     module_params = OmegaConf.to_container(cfg, resolve=True)
-#     pprint(module_params)
-
-
-# if __name__ == "__main__":
-#     main()
+if __name__ == "__main__":
+    main()

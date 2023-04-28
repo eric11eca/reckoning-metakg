@@ -35,26 +35,6 @@ def create_wandb_vars(config):
             'WANDB settings (options), name=%s, project=%s, entity=%s' %
             (config.wandb_name, config.wandb_project, config.wandb_entity))
 
-
-def download_wandb_data(config):
-    """Downloads wandb data
-
-    :param config: the global configuration 
-    :rtype: None 
-    """
-    wandb_cache = WANDB_CACHE if not config.wandb_cache else config.wandb_cache
-
-    dfile_type = config.wandb_data.split("/")[-1]
-    data_cache = os.path.join(wandb_cache, dfile_type)
-    api = wandb.Api()
-    util_logger.info('Trying to grab data from wandb: %s' % config.wandb_data)
-    artifact = api.artifact(config.wandb_data, type='dataset')
-    artifact_dir = artifact.download(root=data_cache)
-
-    util_logger.info('Dataset downloaded to %s' % artifact_dir)
-    config.data_dir = artifact_dir
-
-
 def init_wandb_logger(config):
     """Initializes the wandb logger 
 
@@ -70,27 +50,44 @@ def init_wandb_logger(config):
     return wandb_logger
 
 
+def download_wandb_data(config):
+    """Downloads wandb data
+
+    :param config: the global configuration 
+    :rtype: None 
+    """
+    entity = config.wandb_entity if config.wandb_entity else ""
+    project = "data-collection"
+    alias = config.wandb_data
+    dataset = config.dataset
+    root = f"{config.data_dir}/{dataset}"
+
+    api = wandb.Api()
+    util_logger.info(f'Downloading data from wandb: {dataset}:{alias}')
+    artifact = api.artifact(f'{entity}/{project}/{dataset}:{alias}', type='dataset')
+    artifact_dir = artifact.download(root=root)
+    util_logger.info('Dataset downloaded to %s' % artifact_dir)
+
+
 def download_wandb_models(config):
     """Downloads any models as needed
 
     :param config: the global configuration 
     """
-    wandb_cache = WANDB_CACHE if not config.wandb_cache.strip() else config.wandb_cache
+    model_name = config.checkpoint
+    entity = config.wandb_entity if config.wandb_entity else ""
+    project = config.wandb_project
 
-    dfile_type = config.wandb_model.split("/")[-1]
-    data_cache = os.path.join(wandb_cache, dfile_type)
     api = wandb.Api()
-    util_logger.info('Trying to grab model from wandb: %s' %
-                     config.wandb_model)
-    artifact = api.artifact(config.wandb_model, type='model')
-    artifact_dir = artifact.download(root=data_cache)
-
+    util_logger.info(f'Downloading data from wandb: {model_name}:best_k')
+    artifact = api.artifact(f"{entity}/{project}/{model_name}:best_k", type='model')
+    artifact_dir = artifact.download(root=config.output_dir)
     checkpoints = [os.path.join(artifact_dir, f)
                    for f in os.listdir(artifact_dir) if '.ckpt' in f]
     if len(checkpoints) > 1:
         util_logger.warning('Multi-checkpoints found! Using first one...')
-    config.load_existing = os.path.abspath(checkpoints[0])
-
+    
+    config.checkpoint = os.path.abspath(checkpoints[0])
 
 def setup_wandb(config):
     """Sets up wandb enviroment variables, downloads datasets, models, etc.. as needed
@@ -98,14 +95,13 @@ def setup_wandb(config):
     :param config: the global configuration 
     :rtype: None 
     """
-    if config.wandb_data or config.wandb_project or config.wandb_entity or\
-            config.wandb_model:
-        create_wandb_vars(config)
+    download_wandb_data(config)
 
-    if config.wandb_data:
-        download_wandb_data(config)
     if config.wandb_model:
         download_wandb_models(config)
+
+    if config.wandb_project or config.wandb_entity:
+        create_wandb_vars(config)    
 
 
 class WandbArtifactCallback(pl.Callback):

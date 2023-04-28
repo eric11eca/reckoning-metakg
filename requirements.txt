@@ -10,3 +10,4 @@ scikit-learn
 datasets
 deepspeed
 accelerate
+hydra-core

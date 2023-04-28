@@ -1,7 +1,7 @@
 #!/bin/bash
 
-DATASET="clutrr_2_hop"
-DATASET_TYPE="clutrr"
+DATASET="owa_proof_5_hop"
+DATASET_TYPE="proofwriter"
 INPUT_FORMAT="lm"
 MODEL_TYPE="gpt2"
 MODEL_NAME_OR_PATH="gpt2"
