@@ -7,6 +7,7 @@ model_name_or_path: gpt2-large
 # path param:
 train_dir: data
 predict_dir: data
+data_dir: data
 output_dir: output
 
 # inner_param:
@@ -36,6 +37,8 @@ wandb_name: multi
 wandb_checkpoint: true
 wandb_entity: epfl_nlp_phd
 wandb_project: meta-knowledge
+wandb_data: latest
+wandb_model: false
 wandb_api_key: 9edee5b624841e10c88fcf161d8dc54d4efbee29
 
 # util_param:

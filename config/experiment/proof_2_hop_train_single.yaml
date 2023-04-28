@@ -10,7 +10,9 @@ do_eval: false
 multi_task: false
 baseline: false
 freeze_partial: false
-load_checkpoint: null
+load_checkpoint: true
+checkpoint: owa_proof_2_hop-multi
+wandb_model: true
 
 train_batch_size: 2
 predict_batch_size: 2
