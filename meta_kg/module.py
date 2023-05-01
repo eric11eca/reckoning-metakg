@@ -4,17 +4,19 @@ import logging
 import numpy as np
 import pytorch_lightning as pl
 
+from omegaconf import DictConfig, OmegaConf
+
 from typing import Dict
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from transformers import get_linear_schedule_with_warmup
 
-from peft import (
-    get_peft_model,
-    PrefixTuningConfig,
-    LoraConfig,
-    TaskType
-)
+# from peft import (
+#     get_peft_model,
+#     PrefixTuningConfig,
+#     LoraConfig,
+#     TaskType
+# )
 
 from meta_kg.dataset import MetaKnowledgeDataset
 from meta_kg.model import MetaReasonLM
@@ -36,7 +38,9 @@ class MetaModule(pl.LightningModule):
         """
         super().__init__()
         self.model_logger = logger
-        self.hparams.update(vars(config))
+        # self.hparams.update(vars(config))
+        self.hparams.update(
+            OmegaConf.to_container(config))
 
         self.global_trainin_step = 0
         self.global_epoch_counter = 0
@@ -44,23 +48,6 @@ class MetaModule(pl.LightningModule):
         self.training_step_outputs = []
         self.validation_step_outputs = []
         self.test_step_outputs = []
-
-        metadata = {
-            "task": config.dataset,
-            "model": config.model_name_or_path,
-            "model_type": config.model_type,
-            "input_format": config.input_format,
-            "inner_lr": config.inner_lr,
-            "n_inner_iter": config.n_inner_iter,
-            "learning_rate": config.learning_rate,
-            "baseline": config.baseline,
-            "no_facts": config.no_facts,
-            "random_facts": config.random_facts,
-            "wandb_name": config.wandb_name,
-            "gpu_id": config.device_idx,
-        }
-
-        write_json(metadata, f"{config.run_dir}/metadata.json")
 
     def on_train_epoch_end(self):
         """Called at the end of the training epoch
@@ -193,7 +180,7 @@ class MetaModule(pl.LightningModule):
             self.hparams,
             self.tokenizer,
             self.hparams.train_dir,
-            data_type="test",
+            data_type="dev",
             is_training=False
         )
         self.test_data = MetaKnowledgeDataset(
@@ -330,16 +317,15 @@ class MetaReasonLMModule(MetaModule):
 
         for _, task in enumerate(batch):
             train_features, dev_features, print_out = get_features(
-                self.hparams.device,
-                task,
-                is_train,
+                self.hparams.device, task, is_train,
                 self.hparams.inner_grad_accumulate
             )
 
+            higher_grads = is_train and not self.hparams.fomaml
             with higher.innerloop_ctx(
                 self.model, inner_opt,
                 copy_initial_weights=False,
-                track_higher_grads=is_train
+                track_higher_grads=higher_grads
             ) as (fmodel, diffopt):
                 inner_track, inner_out_prev = {}, {}
 
@@ -539,12 +525,12 @@ class KGMAMLPrefixModule(MetaReasonLMModule):
     def __init__(self, config):
         super().__init__(config)
 
-        peft_config = PrefixTuningConfig(
-            task_type=TaskType.CAUSAL_LM,
-            num_virtual_tokens=config.prefix_dim
-        )
-        self.model.model = get_peft_model(
-            self.model.model, peft_config)
+        # peft_config = PrefixTuningConfig(
+        #     task_type=TaskType.CAUSAL_LM,
+        #     num_virtual_tokens=config.prefix_dim
+        # )
+        # self.model.model = get_peft_model(
+        #     self.model.model, peft_config)
 
         self.prefix_params = {}
         self.model_params = {}
@@ -630,13 +616,13 @@ class KGMAMLLoraModule(MetaReasonLMModule):
     def __init__(self, config):
         super().__init__(config)
 
-        peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM,
-            inference_mode=False, r=16,
-            lora_alpha=32, lora_dropout=0.1
-        )
-        self.model.model = get_peft_model(
-            self.model.model, peft_config)
+        # peft_config = LoraConfig(
+        #     task_type=TaskType.CAUSAL_LM,
+        #     inference_mode=False, r=16,
+        #     lora_alpha=32, lora_dropout=0.1
+        # )
+        # self.model.model = get_peft_model(
+        #     self.model.model, peft_config)
 
         self.trainable_params = {}
         self.frozen_params = {}
@@ -801,7 +787,7 @@ class CausalLMModule(MetaModule):
         :rtype: dict
         :returns: dictionary that includes loss
         """
-        output_dict = self.base_step(batch, is_train=True)
+        output_dict = self.step(batch, is_train=True)
         self.log(
             f'batch_train_loss',
             output_dict["train_loss"],
@@ -820,7 +806,7 @@ class CausalLMModule(MetaModule):
         :rtype: dict
         :returns: dictionary that includes loss
         """
-        output_dict = self.base_step(batch, is_train=False)
+        output_dict = self.step(batch, is_train=False)
         assert len(output_dict["print_out"]["gen_out"]) == len(
             output_dict["print_out"]["answer"])
         self.log(
@@ -861,10 +847,6 @@ class CausalLMModule(MetaModule):
             },
             {
                 "params": parameters_sec,
-                "weight_decay": 0.0
-            },
-            {
-                "params": self.inner_schedular.parameters(),
                 "weight_decay": 0.0
             }
         ]

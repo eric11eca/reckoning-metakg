@@ -11,7 +11,7 @@ import random
 import numpy as np
 import torch
 
-from run_maml import run
+from meta_kg.runner import run
 
 
 def main():

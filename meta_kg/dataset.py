@@ -117,43 +117,29 @@ class ClutrrDataReader(DataReader):
         :param args: the configuration arguments
         :rtype instance: situation_modeling.readers.input_example.InputBase
         """
-        questions = instance["questions"]
-        # proofs = instance["proofs"]
+        question = instance["question"]
         story = instance["facts"]
         guid = instance["guid"]
+        answer = instance["answer"]
 
         qa_pairs = []
-        for qa_item in questions:
-            question = qa_item[0].replace("person", "")
-            output = f"{qa_item[1]} {qa_item[2]}"
-            answer = qa_item[2]
-            fact_enum = [f"fact_{i}" for i in range(len(story))]
-            prefix = f"Based on {' '.join(fact_enum)}"
-            if args.baseline:
-                qa_pairs.append([question, output, answer])
-            else:
-                qa_pairs.append([f"{prefix}, {question}", output, answer])
+        fact_enum = [f"fact_{i}" for i in range(len(story))]
+        prefix = f"Based on {' '.join(fact_enum)}"
+        if args.baseline:
+            qa_pairs.append([question, answer])
+        else:
+            qa_pairs.append([f"{prefix}, {question}", answer])
 
-        facts = []
-        for item in qa_pairs:
-            question = item[0]
-            question = question.replace("?", "")
-            if args.baseline:
-                facts.append([fact for fact in story])
-                if args.multi_task:
-                    recalls = [f"{fact[0]} {fact[1]}" for fact in story]
-                    item[2] = f"{item[2]} because {','.join(recalls)}"
-            else:
-                fact_in, recalls = [], []
-                for i, fact_pair in enumerate(story):
-                    fact = f"{fact_pair[0]} {fact_pair[1]}"
-                    fact_in.append(f"fact_{i}: {fact}")
-                    recalls.append(fact)
-                facts.append(fact_in)
-                if args.multi_task:
-                    item[2] = f"{item[2]} because {','.join(recalls)}"
+        if args.multi_task:
+            for item in qa_pairs:
+                item[1] = f"{item[1]} because {','.join(story)}"
+        if not args.baseline:
+            facts =[f"fact_{i}: {fact}" for i, fact in enumerate(story)]
+        else:
+            facts = story
 
-        return [{"guid": guid, "qa_pairs": [qa_pairs[i]], "facts": facts[i]} for i in range(len(qa_pairs))]
+        batch = [{"guid": guid, "qa_pairs": [item], "facts": facts} for item in qa_pairs]
+        return batch
 
 
 class FolioDataReader(DataReader):
@@ -327,16 +313,10 @@ class MetaDataLoader():
             sampler = SequentialSampler(dataset)
             batch_size = args.predict_batch_size
 
-        if args.input_format == "t2t":
-            if args.baseline:
-                collate_fn = self.text2text_base_collator
-            else:
-                collate_fn = self.text2text_collator
-        elif args.input_format == "lm":
-            if args.baseline:
-                collate_fn = self.causal_lm_base_collator
-            else:
-                collate_fn = self.causal_lm_collator
+        if args.baseline:
+            collate_fn = self.causal_lm_base_collator
+        else:
+            collate_fn = self.causal_lm_collator
 
         self.dataloader = DataLoader(
             dataset,
@@ -386,18 +366,9 @@ class MetaDataLoader():
         eos = self.tokenizer.eos_token
         bos = self.tokenizer.bos_token
 
-        if isinstance(batch[0]["facts"], tuple):
-            facts_batch = [
-                "\n".join([f"{fact[0]} {fact[1]}" for fact in data['facts']]) for data in batch]
-        else:
-            facts_batch = [
-                "\n".join([fact for fact in data['facts']]) for data in batch]
-
+        facts_batch = ["\n".join([fact for fact in data['facts']]) for data in batch]
         questions = [f"{data['qa_pairs'][0][0]}" for data in batch]
-        if len(batch[0]['qa_pairs'][0]) > 2:
-            answers = [data['qa_pairs'][0][2] for data in batch]
-        else:
-            answers = [data['qa_pairs'][0][1] for data in batch]
+        answers = [data['qa_pairs'][0][1] for data in batch]
 
         max_length = 0
         inputs = []
@@ -456,7 +427,6 @@ class MetaDataLoader():
         :param args: the global configuration
         """
         eos = self.tokenizer.eos_token
-        bos = self.tokenizer.bos_token
         batch_features = []
         for qa_data in batch:
             max_length = 0
@@ -465,7 +435,7 @@ class MetaDataLoader():
             train_attention_mask_batch = []
             train_token_type_ids_batch = []
             train_samples = []
-            for i, fact in enumerate(qa_data['facts']):
+            for fact in qa_data['facts']:
                 fact_pair = fact.split(':')
                 train_input_txt = f"{fact_pair[0].strip()}: "
                 train_output_txt = f"{fact_pair[1].strip()}"
@@ -492,10 +462,7 @@ class MetaDataLoader():
             dev_samples = []
             for qa_pair in qa_data["qa_pairs"]:
                 dev_input_txt = qa_pair[0]
-                if len(qa_pair) > 2:
-                    dev_output_txt = f"{qa_pair[2]}{eos}"
-                else:
-                    dev_output_txt = f"{qa_pair[1]}{eos}"
+                dev_output_txt = f"{qa_pair[1]}{eos}"
                 dev_samples.append(
                     (dev_input_txt, dev_output_txt.replace(eos, '')))
                 input_ids, attention_mask, token_type_ids = self._tensorize(
@@ -518,11 +485,6 @@ class MetaDataLoader():
                 "evaluate": self.evaluate
             }
 
-            if self.args.align:
-                feature["input_ids"] = feature["train_input_ids"]
-                feature["attention_mask"] = feature["train_attention_mask"]
-                feature["token_type_ids"] = feature["train_token_type_ids"]
-
             if self.evaluate:
                 train_inputs = [
                     fact[0] for fact in train_samples]
@@ -542,131 +504,5 @@ class MetaDataLoader():
                     "fact": train_outputs,
                     "guid": [qa_data["guid"]]
                 }
-
-                if self.args.align:
-                    feature["print_out"]["question"] = train_inputs
-                    feature["print_out"]["answer"] = train_outputs
             batch_features.append(feature)
         return batch_features
-
-    def text2text_base_collator(self, batch):
-        """Batch collator for this custom class
-        :param batch: an incoming batch
-        :param tokenizer: the model tokenizer
-        :param args: the global configuration
-        """
-        facts_batch = ["\n".join([fact[1]
-                                 for fact in data['facts']]) for data in batch]
-        questions = [f"{data['qa_pairs'][0][0]}" for data in batch]
-        answers = [data['qa_pairs'][0][1] for data in batch]
-        inputs = [f"{facts}\n{question}" for facts,
-                  question in zip(facts_batch, questions)]
-
-        max_length = 0
-        for input in inputs:
-            max_length = max(max_length, len(self.tokenizer(input)))
-
-        tokenized_input = self.tokenizer.batch_encode_plus(
-            inputs,
-            padding=True,
-            truncation=True,
-            return_tensors="pt",
-            max_length=max_length
-        )
-
-        tokenized_output = self.tokenizer.batch_encode_plus(
-            answers,
-            padding=True,
-            truncation=True,
-            return_tensors="pt",
-            max_length=4
-        )
-
-        print_inputs = inputs
-        print_outputs = [data['qa_pairs'][0][1] for data in batch]
-        print_out = {
-            "guid": [data['guid'] for data in batch],
-            "prefix": [self.args.dataset for data in batch],
-            "question": print_inputs,
-            "answer": print_outputs,
-        }
-
-        feature = {
-            "input_ids": tokenized_input["input_ids"],
-            "attention_mask": tokenized_input["attention_mask"],
-            "labels": tokenized_output["input_ids"],
-            "print_out": print_out,
-            "evaluate": self.evaluate
-        }
-
-        return feature
-
-    def text2text_collator(
-        self,
-        batch,
-    ):
-        """Batch collator for this custom class
-        :param batch: an incoming batch
-        :param tokenizer: the model tokenizer
-        :param args: the global configuration
-        """
-        qa_data = batch[0]
-        train_inputs = [fact[0] for fact in qa_data["facts"]]
-        train_outputs = [fact[1] for fact in qa_data["facts"]]
-
-        train_tokenized_input = self.tokenizer.batch_encode_plus(
-            train_inputs,
-            padding=True,
-            truncation=True,
-            return_tensors="pt",
-            max_length=32
-        )
-
-        train_tokenized_output = self.tokenizer.batch_encode_plus(
-            train_outputs,
-            padding=True,
-            truncation=True,
-            return_tensors="pt",
-            max_length=16
-        )
-
-        dev_inputs = [qa_pair[0]
-                      for qa_pair in qa_data["qa_pairs"]]
-        dev_outputs = [str(qa_pair[1])
-                       for qa_pair in qa_data["qa_pairs"]]
-
-        dev_tokenized_input = self.tokenizer.batch_encode_plus(
-            dev_inputs,
-            padding=True,
-            truncation=True,
-            return_tensors="pt",
-            max_length=64
-        )
-
-        dev_tokenized_output = self.tokenizer.batch_encode_plus(
-            dev_outputs,
-            padding=True,
-            truncation=True,
-            return_tensors="pt",
-            max_length=4
-        )
-
-        feature = {
-            "input_ids": dev_tokenized_input["input_ids"],
-            "attention_mask": dev_tokenized_input["attention_mask"],
-            "labels": dev_tokenized_output["input_ids"],
-            "train_input_ids": train_tokenized_input["input_ids"],
-            "train_attention_mask": train_tokenized_input["attention_mask"],
-            "train_labels": train_tokenized_output["input_ids"],
-            "print_out": {"guid": [qa_data["guid"]]},
-            "evaluate": self.evaluate
-        }
-
-        if self.evaluate:
-            feature["print_out"].update({
-                "question": dev_inputs,
-                "answer": dev_outputs,
-                # "prefix": prefix,
-            })
-
-        return feature

@@ -10,7 +10,7 @@ RUN mkdir -p /nlp/tensor/
 COPY meta_kg/ /nlp/meta_kg/
 COPY peft /nlp/peft/
 COPY run_maml.py /nlp/
-COPY cli_maml.py /nlp/
+COPY run_cli.py /nlp/
 COPY run_eval.sh /nlp/
 COPY run_gpt2.sh /nlp/
 
