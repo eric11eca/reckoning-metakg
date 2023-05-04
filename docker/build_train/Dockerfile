@@ -1,4 +1,4 @@
-FROM python:3.9.15-slim
+FROM python:3.10.11-slim
 
 ENV LC_ALL=C.UTF-8
 ENV LANG=C.UTF-8
@@ -45,18 +45,16 @@ RUN git clone https://github.com/facebookresearch/higher.git
 RUN cd higher && pip3 install .
 
 # Copy code
-RUN mkdir -p /nlp
-RUN mkdir -p /nlp/output/
 ARG DUMMY=unknown
 RUN DUMMY=${DUMMY}
+RUN mkdir -p /nlp
+RUN mkdir -p /nlp/output/
+RUN mkdir -p /nlp/data/
 COPY meta_kg/ /nlp/meta_kg/
+COPY scripts/ /nlp/scripts/
+COPY config /nlp/config
 COPY run_maml.py /nlp/
-COPY cli_maml.py /nlp/
-COPY peft /nlp/peft/
-COPY run_gpt2.sh /nlp/
-COPY upload_wandb_data.sh /nlp/
-
-RUN pip3 install accelerate
+COPY run_cli.py /nlp/
 
 ENV WANDB_API_KEY 9edee5b624841e10c88fcf161d8dc54d4efbee29
 
