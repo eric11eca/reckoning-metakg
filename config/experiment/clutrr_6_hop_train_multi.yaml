@@ -1,0 +1,41 @@
+# @package _global_
+
+defaults:
+  - override /meta: default.yaml
+
+# experiment param:
+do_train: true
+do_eval: false
+do_qualitative: false
+
+multi_task: true
+baseline: false
+freeze_partial: false
+
+wandb_name: clutrr_6_hop-multi-6-steps
+
+# checkpoint param:
+load_checkpoint: false
+checkpoint: clutrr_6_hop-multi
+wandb_model: false
+wandb_checkpoint: true
+
+# train param:
+train_batch_size: 1
+predict_batch_size: 1
+num_train_epochs: 10
+
+# inner param:
+n_inner_iter: 6
+inner_mode: all
+dyna_lr: true
+inner_verbose: false
+fomaml: false
+
+# data_param:
+dataset: clutrr_6_hop
+dataset_type: clutrr
+load_order: norm
+no_facts: false
+random_facts: false
+max_data: 0

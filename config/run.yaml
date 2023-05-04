@@ -6,3 +6,4 @@ defaults:
   - experiment: null
 
 device_idx: 0
+n_gpu: 1

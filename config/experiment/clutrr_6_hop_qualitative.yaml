@@ -3,21 +3,23 @@
 defaults:
   - override /meta: default.yaml
 
-do_train: true
-do_eval: false
-do_qualitative: false
+do_train: false
+do_eval: true
+do_qualitative: true
 
 # experiment param:
-multi_task: false
+multi_task: true
 baseline: false
 freeze_partial: false
 load_checkpoint: true
-checkpoint: owa_proof_2_hop
+checkpoint: clutrr_6_hop-multi
 wandb_model: true
+wandb_checkpoint: false
+wandb_name: 1-step-test
 
 train_batch_size: 2
 predict_batch_size: 2
-num_train_epochs: 10
+num_train_epochs: 1
 n_inner_iter: 4
 inner_mode: all
 
@@ -26,9 +28,9 @@ inner_verbose: false
 fomaml: false
 
 # data_param:
-dataset: owa_proof_2_hop
-dataset_type: proofwriter
+dataset: clutrr_6_hop
+dataset_type: clutrr
 load_order: norm
 no_facts: false
 random_facts: false
-max_data: 0
+max_data: 4
