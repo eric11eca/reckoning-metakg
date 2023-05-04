@@ -7,9 +7,12 @@ from meta_kg.utils.wandb_utils import setup_wandb
 from meta_kg.module import (
     CausalLMModule,
     KGMAMLModule,
-    KGMAMLPrefixModule,
-    KGMAMLLoraModule
 )
+
+# from meta_kg.module_peft import (
+#     KGMAMLPrefixModule,
+#     KGMAMLLoraModule,
+# )
 
 util_logger = logging.getLogger(
     'meta_knowledge.runner'
@@ -17,8 +20,8 @@ util_logger = logging.getLogger(
 
 MODULE_DICT = {
     "all": KGMAMLModule,
-    "prefix": KGMAMLPrefixModule,
-    "lora": KGMAMLLoraModule,
+    # "prefix": KGMAMLPrefixModule,
+    # "lora": KGMAMLLoraModule,
     "baseline": CausalLMModule,
 }
 
@@ -28,8 +31,6 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 def run(args):
     util_logger.info('Setting up configuration for model runner...')
     setup_wandb(args)
-
-    print(args.checkpoint)
 
     if args.baseline:
         args.inner_mode = 'baseline'
