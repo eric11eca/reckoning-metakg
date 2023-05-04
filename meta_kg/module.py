@@ -1,27 +1,18 @@
 import torch
 import higher
 import logging
-import numpy as np
 import pytorch_lightning as pl
 
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import OmegaConf
 
 from typing import Dict
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from transformers import get_linear_schedule_with_warmup
 
-# from peft import (
-#     get_peft_model,
-#     PrefixTuningConfig,
-#     LoraConfig,
-#     TaskType
-# )
-
 from meta_kg.dataset import MetaKnowledgeDataset
 from meta_kg.model import MetaReasonLM
 from meta_kg.optimizer import LSLRSchedular
-from meta_kg.utils.py_io import write_json
 
 util_logger = logging.getLogger(
     'meta_knowledge.module'
@@ -38,7 +29,6 @@ class MetaModule(pl.LightningModule):
         """
         super().__init__()
         self.model_logger = logger
-        # self.hparams.update(vars(config))
         self.hparams.update(
             OmegaConf.to_container(config))
 
@@ -180,7 +170,7 @@ class MetaModule(pl.LightningModule):
             self.hparams,
             self.tokenizer,
             self.hparams.train_dir,
-            data_type="dev",
+            data_type="test",
             is_training=False
         )
         self.test_data = MetaKnowledgeDataset(
@@ -279,14 +269,15 @@ class MetaReasonLMModule(MetaModule):
                 self.inner_schedular.step(
                     diffopt, named_params, iter)
             diffopt.step(train_loss)
+            # if self.hparams.do_qualitative:
+            #     fmodel.generate(print_out)
 
-    def inner_loop_end(self, features, print_out, fmodel, is_train: bool) -> Dict:
+    def inner_loop_end(self, features, print_out, fmodel) -> Dict:
         """Runs a single inner loop step
 
         :param features: the target batch
         :param print_out: None in this step
         :param fmodel: the fast model
-        :param is_train: whether to run training or validation
         :rtype: dict
         :returns: dictionary that includes loss
         """
@@ -335,12 +326,12 @@ class MetaReasonLMModule(MetaModule):
 
                 if self.hparams.inner_verbose:
                     inner_out_prev = self.inner_loop_end(
-                        train_features, print_out, fmodel, is_train)
+                        train_features, print_out, fmodel)
 
                 self.inner_loop_step(
                     train_features, print_out, fmodel, diffopt)
                 inner_out_post = self.inner_loop_end(
-                    train_features, print_out, fmodel, is_train)
+                    train_features, print_out, fmodel)
                 inner_loss += inner_out_post["loss"].detach().cpu()
 
                 if self.hparams.inner_verbose:
@@ -519,199 +510,6 @@ class KGMAMLModule(MetaReasonLMModule):
         scheduler = self.get_lr_scheduler()
 
         return [optimizer], [scheduler]
-
-
-class KGMAMLPrefixModule(MetaReasonLMModule):
-    def __init__(self, config):
-        super().__init__(config)
-
-        # peft_config = PrefixTuningConfig(
-        #     task_type=TaskType.CAUSAL_LM,
-        #     num_virtual_tokens=config.prefix_dim
-        # )
-        # self.model.model = get_peft_model(
-        #     self.model.model, peft_config)
-
-        self.prefix_params = {}
-        self.model_params = {}
-        for name, param in self.model.named_parameters():
-            if param.requires_grad:
-                self.prefix_params[name] = param
-            else:
-                self.model_params[name] = param
-
-        self.lm_head = self.model.model.base_model.lm_head
-        for name, param in self.lm_head.named_parameters():
-            param.requires_grad = True
-            self.prefix_params[name] = param
-
-        self.inner_lr_schedular_config(
-            config.n_inner_iter,
-            config.inner_lr
-        )
-
-        self.num_prefix_params = len(self.prefix_params)
-        self.num_model_params = len(self.model_params)
-
-        util_logger.info(
-            f"Number of prefix parameters: {self.num_prefix_params}")
-        util_logger.info(
-            f"Number of model parameters: {self.num_model_params}")
-
-    def set_model_params_grad(self, grad: bool = True):
-        for _, param in self.model_params.items():
-            param.requires_grad = grad
-
-    def set_prefix_params_grad(self, grad: bool = True):
-        for _, param in self.prefix_params.items():
-            param.requires_grad = grad
-
-    def config_inner_optimizer(self):
-        """Configures the inner loop optimizer
-
-        :param model_params: the model parameters
-        :rtype: torch.optim
-        :returns: the optimizer
-        """
-        model_params = []
-        for _, param in self.prefix_params.items():
-            model_params.append(
-                {"params": param, "lr": self.hparams.inner_lr})
-
-        inner_opt = torch.optim.AdamW(
-            model_params,
-            amsgrad=False
-        )
-        return inner_opt
-
-    def configure_optimizers(self):
-        """Setup the main optimizer
-
-        :returns: the main optimizer
-        """
-
-        parameters_prefix = [
-            p for _, p in self.prefix_params.items()
-        ]
-
-        optimizer_grouped_parameters = [
-            {
-                "params": parameters_prefix,
-                "weight_decay": self.hparams.weight_decay
-            }
-        ]
-
-        optimizer = AdamW(
-            optimizer_grouped_parameters,
-            lr=self.hparams.learning_rate,
-            eps=self.hparams.adam_epsilon
-        )
-        self.opt = optimizer
-        scheduler = self.get_lr_scheduler()
-
-        return [optimizer], [scheduler]
-
-
-class KGMAMLLoraModule(MetaReasonLMModule):
-    def __init__(self, config):
-        super().__init__(config)
-
-        # peft_config = LoraConfig(
-        #     task_type=TaskType.CAUSAL_LM,
-        #     inference_mode=False, r=16,
-        #     lora_alpha=32, lora_dropout=0.1
-        # )
-        # self.model.model = get_peft_model(
-        #     self.model.model, peft_config)
-
-        self.trainable_params = {}
-        self.frozen_params = {}
-        for name, param in self.model.named_parameters():
-            if param.requires_grad:
-                self.trainable_params[name] = param
-            else:
-                self.frozen_params[name] = param
-
-        for name, param in self.model.named_parameters():
-            if np.any([x in name for x in ['lm_head', 'wpe', 'wte']]):
-                param.requires_grad = True
-                self.trainable_params[name] = param
-
-        # for name, param in self.model.named_parameters():
-        #     if np.any([x in name for x in ['.33', '.34.', '.35.']]):
-        #         print(f"Enable training: {name}")
-        #         param.requires_grad = True
-        #         self.trainable_params[name] = param
-
-        self.inner_lr_schedular_config(
-            config.n_inner_iter,
-            config.inner_lr
-        )
-
-    def set_model_params_grad(self, grad: bool = True):
-        for _, param in self.model_params.items():
-            param.requires_grad = grad
-
-    def set_prefix_params_grad(self, grad: bool = True):
-        for _, param in self.lora_params.items():
-            param.requires_grad = grad
-
-    def config_inner_optimizer(self):
-        """Configures the inner loop optimizer
-
-        :param model_params: the model parameters
-        :rtype: torch.optim
-        :returns: the optimizer
-        """
-        model_params = []
-        for _, param in self.trainable_params.items():
-            model_params.append(
-                {"params": param, "lr": self.hparams.inner_lr})
-
-        inner_opt = torch.optim.AdamW(
-            model_params,
-            amsgrad=False
-        )
-        return inner_opt
-
-    def configure_optimizers(self):
-        """Setup the main optimizer
-
-        :returns: the main optimizer
-        """
-        no_decay = ["bias", "LayerNorm.weight"]
-        parameters_first = [
-            p for n, p in self.trainable_params.items() if not any(nd in n for nd in no_decay)
-        ]
-        parameters_sec = [
-            p for n, p in self.trainable_params.items() if any(nd in n for nd in no_decay)
-        ]
-
-        optimizer_grouped_parameters = [
-            {
-                "params": parameters_first,
-                "weight_decay": self.hparams.weight_decay
-            },
-            {
-                "params": parameters_sec,
-                "weight_decay": 0.0
-            },
-            {
-                "params": self.inner_schedular.parameters(),
-                "weight_decay": 0.0
-            }
-        ]
-
-        optimizer = AdamW(
-            optimizer_grouped_parameters,
-            lr=self.hparams.learning_rate,
-            eps=self.hparams.adam_epsilon
-        )
-        self.opt = optimizer
-        scheduler = self.get_lr_scheduler()
-
-        return [optimizer], [scheduler]
-
 
 class CausalLMModule(MetaModule):
     def __init__(self, config):

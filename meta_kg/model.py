@@ -178,10 +178,8 @@ class MetaReasonLM(CausalLM):
                 main_out["print_out"]["gen_out"] = self.generate(
                     main_out["print_out"]["prompt"])
         return main_out
-
-    def generate(self, print_out):
-        device = self.model.device
-
+    
+    def preprocess_generation(self, print_out):
         output_length = []
         for answer in print_out["answer"]:
             out_ids = self.tokenizer(answer, return_tensors="pt").input_ids
@@ -191,30 +189,52 @@ class MetaReasonLM(CausalLM):
         input_ids_batch = []
         for question in print_out["question"]:
             input_ids = self.tokenizer(
-                question, return_tensors="pt").input_ids.to(device)
+                question, return_tensors="pt").input_ids.to(self.model.device)
             input_ids_batch.append(input_ids)
+        
+        return input_ids_batch, max_out_length
+    
+    def generate_step(self, input_ids, max_out_length):
+        generation_config = GenerationConfig.from_pretrained(
+            "gpt2",
+            max_new_tokens=max_out_length,
+            num_beams=5,
+            early_stopping=True,
+            top_p=None,
+            do_sample=False,
+            num_return_sequences=1,
+            pad_token_id=self.tokenizer.eos_token_id,
+        )
+        greedy_output = self.model.generate(
+            input_ids=input_ids,
+            generation_config=generation_config)
+        out = self.tokenizer.decode(
+            greedy_output[0][input_ids.shape[1]:],
+            skip_special_tokens=True)
+        return out
 
-        outputs = []
-        for input_ids in input_ids_batch:
-            # max_length = input_ids.size(1) + max_out_length
-            generation_config = GenerationConfig.from_pretrained(
-                "gpt2",
-                max_new_tokens=max_out_length,
-                num_beams=5,
-                early_stopping=True,
-                top_p=None,
-                do_sample=False,
-                num_return_sequences=1,
-                pad_token_id=self.tokenizer.eos_token_id,
-            )
+    def generate(self, print_out):
+        input_ids_batch, max_out_length = self.preprocess_generation(print_out)
+        
+        # if self.global_config.do_qualitative:
+        #     outputs = []
+        #     for question, facts, input_ids, hop, label in input_ids_batch:
+        #         out = self.generate_step(input_ids, max_out_length)
+        #         outputs.append({
+        #             "question": question,
+        #             "facts": facts,
+        #             "gen_out": out,
+        #             "label": label,
+        #             "hop": hop
+        #         })
 
-            greedy_output = self.model.generate(
-                input_ids=input_ids,
-                generation_config=generation_config)
-            out = self.tokenizer.decode(
-                greedy_output[0][input_ids.shape[1]:],
-                skip_special_tokens=True)
-            outputs.append(out)
+        #     out_file = f"{self.global_config.output_dir}/{self.global_config.dataset}-qualitative.jsonl"
+        #     write_jsonl(outputs, out_file)
+        # else:
+        outputs = [
+            self.generate_step(input_ids, max_out_length)
+            for input_ids in input_ids_batch
+        ]
 
         return outputs
 
