@@ -3,11 +3,7 @@ tqdm
 wandb
 torch
 pytorch-lightning
-torchmetrics
-sentence_transformers
 transformers
-scikit-learn
 datasets
-deepspeed
-accelerate
+scikit-learn
 hydra-core
