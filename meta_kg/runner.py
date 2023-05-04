@@ -41,7 +41,8 @@ def run(args):
         if args.load_checkpoint and args.checkpoint is not None:
             model = module_class.load_from_checkpoint(
                 args.checkpoint,
-                config=args
+                config=args,
+                map_location=args.device
             )
         else:
             model = module_class(args)
@@ -63,6 +64,7 @@ def run(args):
             # train on 1 datapoint for gradient enabling in validation
             model = module_class.load_from_checkpoint(
                 args.checkpoint,
-                config=args
+                config=args,
+                map_location=args.device
             )
             trainer.fit(model)
