@@ -1,5 +1,8 @@
 import os
+import wandb
 import logging
+
+from omegaconf import OmegaConf
 
 from meta_kg.train import setup_trainer
 from meta_kg.utils.wandb_utils import setup_wandb
@@ -31,6 +34,10 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 def run(args):
     util_logger.info('Setting up configuration for model runner...')
     setup_wandb(args)
+
+    wandb.config = OmegaConf.to_container(
+        args, resolve=True, throw_on_missing=True
+    )
 
     if args.baseline:
         args.inner_mode = 'baseline'
