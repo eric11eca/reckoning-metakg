@@ -3,6 +3,12 @@
 defaults:
   - override /meta: default.yaml
 
+# EleutherAI/gpt-j-6b
+# gpt2-xl
+
+model_type: t5
+model_name_or_path: t5-small
+
 # experiment param:
 do_train: true
 do_eval: false
@@ -10,32 +16,39 @@ do_qualitative: false
 
 multi_task: true
 baseline: false
+use_lora: false
 freeze_partial: false
+condition: false
 
-wandb_name: clutrr_6_hop-multi-6-steps
+wandb_name: gpt2-multi
+wandb_project: meta-knowledge
 
 # checkpoint param:
 load_checkpoint: false
-checkpoint: clutrr_6_hop-multi
+checkpoint: None
 wandb_model: false
-wandb_checkpoint: true
+wandb_checkpoint: false
 
 # train param:
-train_batch_size: 1
-predict_batch_size: 1
-num_train_epochs: 10
+train_batch_size: 2
+predict_batch_size: 4
+num_train_epochs: 5
+callback_monitor: val_acc_label
 
 # inner param:
-n_inner_iter: 6
-inner_mode: all
+n_inner_iter: 4
 dyna_lr: true
 inner_verbose: false
 fomaml: false
+inner_mode: all
 
 # data_param:
 dataset: clutrr_6_hop
 dataset_type: clutrr
-load_order: norm
+load_order: in
 no_facts: false
 random_facts: false
+no_question: false
 max_data: 0
+
+device_idx: 0
