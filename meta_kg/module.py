@@ -11,12 +11,10 @@ from torch.utils.data import DataLoader
 from transformers import get_linear_schedule_with_warmup
 
 from meta_kg.dataset import MetaKnowledgeDataset
-from meta_kg.model import MetaReasonLM
+from meta_kg.model import MetaReasonLM, MetaReasonSeq2Seq
 from meta_kg.optimizer import LSLRSchedular
 
-util_logger = logging.getLogger(
-    'meta_knowledge.module'
-)
+util_logger = logging.getLogger("meta_knowledge.module")
 
 
 class MetaModule(pl.LightningModule):
@@ -29,8 +27,7 @@ class MetaModule(pl.LightningModule):
         """
         super().__init__()
         self.model_logger = logger
-        self.hparams.update(
-            OmegaConf.to_container(config))
+        self.hparams.update(OmegaConf.to_container(config))
 
         self.global_trainin_step = 0
         self.global_epoch_counter = 0
@@ -58,11 +55,9 @@ class MetaModule(pl.LightningModule):
         outputs = self.validation_step_outputs
         if len(outputs) == 0:
             if self.hparams.multi_task:
-                self.log(f"val_acc_label", 0.50,
-                         on_epoch=True, prog_bar=False)
+                self.log(f"val_acc_label", 0.50, on_epoch=True, prog_bar=False)
             else:
-                self.log(f"val_acc", 0.50,
-                         on_epoch=True, prog_bar=False)
+                self.log(f"val_acc", 0.50, on_epoch=True, prog_bar=False)
             return
 
         val_loss, outputs = self.validation_epoch_logic(outputs)
@@ -77,18 +72,13 @@ class MetaModule(pl.LightningModule):
         metrics_out = self.model.evaluate_output(
             outputs,
             f"{self.hparams.run_dir}/{out_file_name}",
-            f"{self.hparams.run_dir}/{metirc_file_name}"
+            f"{self.hparams.run_dir}/{metirc_file_name}",
         )
 
         self.validation_step_outputs.clear()
 
         for metric_name, metric_value in metrics_out.items():
-            self.log(
-                f"val_{metric_name}",
-                metric_value,
-                on_epoch=True,
-                prog_bar=True
-            )
+            self.log(f"val_{metric_name}", metric_value, on_epoch=True, prog_bar=True)
 
     def test_step(self, batch, batch_idx) -> Dict:
         test_out = self.validation_step(batch, batch_idx)
@@ -109,35 +99,32 @@ class MetaModule(pl.LightningModule):
         metrics_out = self.model.evaluate_output(
             outputs,
             f"{self.hparams.run_dir}/{out_file_name}",
-            f"{self.hparams.run_dir}/{metirc_file_name}"
+            f"{self.hparams.run_dir}/{metirc_file_name}",
         )
 
         self.test_step_outputs.clear()
         for metric_name, metric_value in metrics_out.items():
-            self.log(
-                f"test_{metric_name}",
-                metric_value,
-                on_epoch=True,
-                prog_bar=True
-            )
+            self.log(f"test_{metric_name}", metric_value, on_epoch=True, prog_bar=True)
 
     def get_lr_scheduler(self):
-        """Sets up the optimizer learning rate scheduler
-
-        """
+        """Sets up the optimizer learning rate scheduler"""
         num_devices = self.hparams.n_gpu if torch.cuda.is_available() else 1
-        effective_batch_size = self.hparams.train_batch_size * \
-            self.hparams.gradient_accumulation_steps * num_devices
+        effective_batch_size = (
+            self.hparams.train_batch_size
+            * self.hparams.gradient_accumulation_steps
+            * num_devices
+        )
 
-        total_steps = (len(self.train_dataloader().dataset) /
-                       effective_batch_size) * self.hparams.num_train_epochs
+        total_steps = (
+            len(self.train_dataloader().dataset) / effective_batch_size
+        ) * self.hparams.num_train_epochs
         self.hparams.warmup_steps = (
             total_steps / effective_batch_size
         ) * self.hparams.warmup_proportion
 
         self.model_logger.info(
-            'total_steps computed for scheduler: %s, warmup step: %s' % (
-                total_steps, str(self.hparams.warmup_steps))
+            "total_steps computed for scheduler: %s, warmup step: %s"
+            % (total_steps, str(self.hparams.warmup_steps))
         )
 
         scheduler = get_linear_schedule_with_warmup(
@@ -145,25 +132,19 @@ class MetaModule(pl.LightningModule):
             num_warmup_steps=self.hparams.warmup_steps,
             num_training_steps=total_steps,
         )
-        scheduler = {
-            "scheduler": scheduler,
-            "interval": "step",
-            "frequency": 1
-        }
+        scheduler = {"scheduler": scheduler, "interval": "step", "frequency": 1}
         return scheduler
 
     def load_dataset(self):
-        """Loads the dataset
-
-        """
-        self.model_logger.info('Loading dataset')
+        """Loads the dataset"""
+        self.model_logger.info("Loading dataset")
         self.train_data = MetaKnowledgeDataset(
             self.model_logger,
             self.hparams,
             self.tokenizer,
             self.hparams.train_dir,
             data_type="train",
-            is_training=True
+            is_training=True,
         )
         self.dev_data = MetaKnowledgeDataset(
             self.model_logger,
@@ -171,7 +152,7 @@ class MetaModule(pl.LightningModule):
             self.tokenizer,
             self.hparams.train_dir,
             data_type="test",
-            is_training=False
+            is_training=False,
         )
         self.test_data = MetaKnowledgeDataset(
             self.model_logger,
@@ -179,9 +160,9 @@ class MetaModule(pl.LightningModule):
             self.tokenizer,
             self.hparams.train_dir,
             data_type="test",
-            is_training=False
+            is_training=False,
         )
-        self.model_logger.info('Dataset loaded')
+        self.model_logger.info("Dataset loaded")
 
     def train_dataloader(self):
         """Loader to building training data.
@@ -189,9 +170,7 @@ class MetaModule(pl.LightningModule):
         :rtype: DataLoader
         """
         dataloader = self.train_data.load_dataloader()
-        self.model_logger.info(
-            'Length of training data loader %d' % len(dataloader)
-        )
+        self.model_logger.info("Length of training data loader %d" % len(dataloader))
         return dataloader
 
     def val_dataloader(self):
@@ -200,9 +179,7 @@ class MetaModule(pl.LightningModule):
         :rtype: DataLoader
         """
         dataloader = self.dev_data.load_dataloader()
-        self.model_logger.info(
-            'Length of validation data loader %d' % len(dataloader)
-        )
+        self.model_logger.info("Length of validation data loader %d" % len(dataloader))
         return dataloader
 
     def test_dataloader(self):
@@ -211,9 +188,7 @@ class MetaModule(pl.LightningModule):
         :rtype: DataLoader
         """
         dataloader = self.test_data.load_dataloader()
-        self.model_logger.info(
-            'Length of test data loader %d' % len(dataloader)
-        )
+        self.model_logger.info("Length of test data loader %d" % len(dataloader))
         return dataloader
 
 
@@ -221,28 +196,25 @@ class MetaReasonLMModule(MetaModule):
     def __init__(self, config):
         super().__init__(config, util_logger)
         util_logger.info("Running KG-MAML model")
-
-        self.model = MetaReasonLM.from_config(config)
+        if config.model_type == "t5":
+            self.model = MetaReasonSeq2Seq.from_config(config)
+        else:
+            self.model = MetaReasonLM.from_config(config)
         self.tokenizer = self.model.tokenizer
         self.load_dataset()
-        self.inner_lr_schedular_config(
-            config.n_inner_iter,
-            config.inner_lr
-        )
+        self.inner_lr_schedular_config(config.n_inner_iter, config.inner_lr)
         self.model_logger.info(
-            f'Loaded runner instance, global_epoch_counter={self.global_epoch_counter}'
+            f"Loaded runner instance, global_epoch_counter={self.global_epoch_counter}"
         )
 
     def inner_lr_schedular_config(self, n_inner_iter, inner_lr):
         self.inner_schedular = LSLRSchedular(
-            num_inner_iter=n_inner_iter,
-            init_lr=inner_lr)
-        params_opt = list(filter(
-            lambda p: p[1].requires_grad,
-            self.model.named_parameters()))
-        self.inner_schedular.initialization(
-            self.model.named_parameters(),
-            params_opt)
+            num_inner_iter=n_inner_iter, init_lr=inner_lr
+        )
+        params_opt = list(
+            filter(lambda p: p[1].requires_grad, self.model.named_parameters())
+        )
+        self.inner_schedular.initialization(self.model.named_parameters(), params_opt)
 
     def inner_loop_step(self, features, print_out, fmodel, diffopt) -> Dict:
         """Runs a single inner loop step
@@ -266,8 +238,7 @@ class MetaReasonLMModule(MetaModule):
                 named_params = self.trainable_params.items()
 
             if self.hparams.dyna_lr:
-                self.inner_schedular.step(
-                    diffopt, named_params, iter)
+                self.inner_schedular.step(diffopt, named_params, iter)
             diffopt.step(train_loss)
             # if self.hparams.do_qualitative:
             #     fmodel.generate(print_out)
@@ -283,12 +254,11 @@ class MetaReasonLMModule(MetaModule):
         """
         with torch.no_grad():
             try:
-                train_pred = fmodel(
-                    features, print_out, is_inner=True)
+                train_pred = fmodel(features, print_out, is_inner=True)
             except:
                 print("inner loop error")
                 print(print_out)
-                return {"loss": torch.tensor(0., device=self.device)}
+                return {"loss": torch.tensor(0.0, device=self.device)}
             return train_pred
 
     def step(self, batch, is_train: bool) -> Dict:
@@ -300,23 +270,23 @@ class MetaReasonLMModule(MetaModule):
         :returns: dictionary that includes loss
         """
         inner_opt = self.config_inner_optimizer()
-        loss = torch.tensor(0., device=self.device)
-        outer_loss = torch.tensor(0., device='cpu')
-        inner_loss = torch.tensor(0., device='cpu')
-        inner_loss_diff = torch.tensor(0., device='cpu')
+        loss = torch.tensor(0.0, device=self.device)
+        outer_loss = torch.tensor(0.0, device="cpu")
+        inner_loss = torch.tensor(0.0, device="cpu")
+        inner_loss_diff = torch.tensor(0.0, device="cpu")
         print_outs = []
 
         for _, task in enumerate(batch):
             train_features, dev_features, print_out = get_features(
-                self.hparams.device, task, is_train,
-                self.hparams.inner_grad_accumulate
+                self.hparams.device, task, is_train, self.hparams.inner_grad_accumulate
             )
 
             higher_grads = is_train and not self.hparams.fomaml
             with higher.innerloop_ctx(
-                self.model, inner_opt,
+                self.model,
+                inner_opt,
                 copy_initial_weights=False,
-                track_higher_grads=higher_grads
+                track_higher_grads=higher_grads,
             ) as (fmodel, diffopt):
                 inner_track, inner_out_prev = {}, {}
 
@@ -326,20 +296,19 @@ class MetaReasonLMModule(MetaModule):
 
                 if self.hparams.inner_verbose:
                     inner_out_prev = self.inner_loop_end(
-                        train_features, print_out, fmodel)
+                        train_features, print_out, fmodel
+                    )
 
-                self.inner_loop_step(
-                    train_features, print_out, fmodel, diffopt)
-                inner_out_post = self.inner_loop_end(
-                    train_features, print_out, fmodel)
+                self.inner_loop_step(train_features, print_out, fmodel, diffopt)
+                inner_out_post = self.inner_loop_end(train_features, print_out, fmodel)
                 inner_loss += inner_out_post["loss"].detach().cpu()
 
                 if self.hparams.inner_verbose:
                     diff = self._inner_loss_difference(
-                        inner_out_prev, inner_out_post, inner_track)
+                        inner_out_prev, inner_out_post, inner_track
+                    )
                     inner_loss_diff += diff
-                    self._inner_token_loss(
-                        inner_out_prev, inner_out_post, inner_track)
+                    self._inner_token_loss(inner_out_prev, inner_out_post, inner_track)
 
                 if is_train:
                     dev_out = fmodel(dev_features, print_out)
@@ -352,9 +321,9 @@ class MetaReasonLMModule(MetaModule):
                         dev_out["print_out"].update(inner_track)
                         print_outs.append(dev_out["print_out"])
         output_dict = {
-            'loss': loss,
-            'inner_loss': inner_loss.detach() / len(batch),
-            'outer_loss': outer_loss.detach() / len(batch),
+            "loss": loss,
+            "inner_loss": inner_loss.detach() / len(batch),
+            "outer_loss": outer_loss.detach() / len(batch),
         }
 
         if self.hparams.inner_verbose:
@@ -369,7 +338,7 @@ class MetaReasonLMModule(MetaModule):
         token_loss = []
         prev_token_loss = inner_out_prev["token_loss"]
         post_token_loss = inner_out_post["token_loss"]
-        for (prev_loss, post_loss) in zip(prev_token_loss, post_token_loss):
+        for prev_loss, post_loss in zip(prev_token_loss, post_token_loss):
             for token in post_loss:
                 curr = post_loss[token]
                 prev = prev_loss[token]
@@ -379,8 +348,7 @@ class MetaReasonLMModule(MetaModule):
         inner_track["token_loss"] = [token_loss]
 
     def _inner_loss_difference(self, inner_out_prev, inner_out_post, inner_track):
-        diff = inner_out_post["loss"].detach() - \
-            inner_out_prev["loss"].detach()
+        diff = inner_out_post["loss"].detach() - inner_out_prev["loss"].detach()
         inner_track["inner_loss_diff"] = [diff]
         inner_track["inner_loss"] = [inner_out_post["loss"].item()]
         return diff
@@ -396,11 +364,11 @@ class MetaReasonLMModule(MetaModule):
         output_dict = self.step(batch, is_train=True)
         for mkey in ["inner_loss", "outer_loss"]:
             self.log(
-                f'batch_{mkey}',
+                f"batch_{mkey}",
                 output_dict[mkey],
                 on_step=True,
                 on_epoch=False,
-                prog_bar=True
+                prog_bar=True,
             )
         self.global_trainin_step += 1
         return output_dict
@@ -418,11 +386,11 @@ class MetaReasonLMModule(MetaModule):
         output_dict = self.step(batch, is_train=False)
         for mkey in ["inner_loss", "outer_loss"]:
             self.log(
-                f'val_batch_{mkey}',
+                f"val_batch_{mkey}",
                 output_dict[mkey],
                 on_step=True,
                 on_epoch=False,
-                prog_bar=False
+                prog_bar=False,
             )
         self.validation_step_outputs.append(output_dict)
         return output_dict
@@ -458,14 +426,10 @@ class KGMAMLModule(MetaReasonLMModule):
         model_params = []
         for _, param in self.model.named_parameters():
             if param.requires_grad:
-                model_params.append(
-                    {"params": param, "lr": self.hparams.inner_lr})
+                model_params.append({"params": param, "lr": self.hparams.inner_lr})
 
         if self.hparams.inner_opt == "adam":
-            inner_opt = torch.optim.AdamW(
-                model_params,
-                amsgrad=False
-            )
+            inner_opt = torch.optim.AdamW(model_params, amsgrad=False)
         else:
             inner_opt = torch.optim.SGD(
                 model_params,
@@ -480,36 +444,32 @@ class KGMAMLModule(MetaReasonLMModule):
         """
         no_decay = ["bias", "LayerNorm.weight"]
         parameters_first = [
-            p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay)
+            p
+            for n, p in self.model.named_parameters()
+            if not any(nd in n for nd in no_decay)
         ]
         parameters_sec = [
-            p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay)
+            p
+            for n, p in self.model.named_parameters()
+            if any(nd in n for nd in no_decay)
         ]
 
         optimizer_grouped_parameters = [
-            {
-                "params": parameters_first,
-                "weight_decay": self.hparams.weight_decay
-            },
-            {
-                "params": parameters_sec,
-                "weight_decay": 0.0
-            },
-            {
-                "params": self.inner_schedular.parameters(),
-                "weight_decay": 0.0
-            }
+            {"params": parameters_first, "weight_decay": self.hparams.weight_decay},
+            {"params": parameters_sec, "weight_decay": 0.0},
+            {"params": self.inner_schedular.parameters(), "weight_decay": 0.0},
         ]
 
         optimizer = AdamW(
             optimizer_grouped_parameters,
             lr=self.hparams.learning_rate,
-            eps=self.hparams.adam_epsilon
+            eps=self.hparams.adam_epsilon,
         )
         self.opt = optimizer
         scheduler = self.get_lr_scheduler()
 
         return [optimizer], [scheduler]
+
 
 class CausalLMModule(MetaModule):
     def __init__(self, config):
@@ -521,14 +481,15 @@ class CausalLMModule(MetaModule):
         """
         super().__init__(config, util_logger)
 
-        util_logger.info("Running baseline model")
-
-        self.model = MetaReasonLM.from_config(config)
+        if config.model_type == "t5":
+            self.model = MetaReasonSeq2Seq.from_config(config)
+        else:
+            self.model = MetaReasonLM.from_config(config)
         self.tokenizer = self.model.tokenizer
 
         self.load_dataset()
         self.model_logger.info(
-            f'Loaded runner instance, global_epoch_counter={self.global_epoch_counter}'
+            f"Loaded runner instance, global_epoch_counter={self.global_epoch_counter}"
         )
 
     def step(self, batch, is_train: bool) -> Dict:
@@ -543,36 +504,33 @@ class CausalLMModule(MetaModule):
         print_out = batch["print_out"]
 
         features = {
-            "input_ids": batch["input_ids"].to(
-                torch.device(self.hparams.device)),
+            "input_ids": batch["input_ids"].to(torch.device(self.hparams.device)),
             "attention_mask": batch["attention_mask"].to(
-                torch.device(self.hparams.device)),
-            "evaluate": not is_train
+                torch.device(self.hparams.device)
+            ),
+            "evaluate": not is_train,
         }
 
         if "token_type_ids" in batch:
             features["token_type_ids"] = batch["token_type_ids"].to(
-                torch.device(self.hparams.device))
+                torch.device(self.hparams.device)
+            )
 
         if "labels" in batch:
-            features["labels"] = batch["labels"].to(
-                torch.device(self.hparams.device))
+            features["labels"] = batch["labels"].to(torch.device(self.hparams.device))
 
         if is_train:
             out = self.model(features, print_out)
             loss = out["loss"]
-            output_dict = {
-                'loss': loss,
-                'train_loss': loss.cpu()
-            }
+            output_dict = {"loss": loss, "train_loss": loss.cpu()}
         else:
             with torch.no_grad():
                 out = self.model(features, print_out)
                 loss = out["loss"]
                 output_dict = {
-                    'loss': loss,
-                    'train_loss': loss.cpu(),
-                    'print_out': out["print_out"],
+                    "loss": loss,
+                    "train_loss": loss.cpu(),
+                    "print_out": out["print_out"],
                 }
 
         return output_dict
@@ -587,11 +545,11 @@ class CausalLMModule(MetaModule):
         """
         output_dict = self.step(batch, is_train=True)
         self.log(
-            f'batch_train_loss',
+            f"batch_train_loss",
             output_dict["train_loss"],
             on_step=True,
             on_epoch=False,
-            prog_bar=True
+            prog_bar=True,
         )
         self.global_trainin_step += 1
         return output_dict
@@ -606,13 +564,14 @@ class CausalLMModule(MetaModule):
         """
         output_dict = self.step(batch, is_train=False)
         assert len(output_dict["print_out"]["gen_out"]) == len(
-            output_dict["print_out"]["answer"])
+            output_dict["print_out"]["answer"]
+        )
         self.log(
-            f'val_batch_loss',
+            f"val_batch_loss",
             output_dict["loss"],
             on_step=True,
             on_epoch=False,
-            prog_bar=False
+            prog_bar=False,
         )
         self.validation_step_outputs.append(output_dict)
         return output_dict
@@ -632,27 +591,25 @@ class CausalLMModule(MetaModule):
         """
         no_decay = ["bias", "LayerNorm.weight"]
         parameters_first = [
-            p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay)
+            p
+            for n, p in self.model.named_parameters()
+            if not any(nd in n for nd in no_decay)
         ]
         parameters_sec = [
-            p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay)
+            p
+            for n, p in self.model.named_parameters()
+            if any(nd in n for nd in no_decay)
         ]
 
         optimizer_grouped_parameters = [
-            {
-                "params": parameters_first,
-                "weight_decay": self.hparams.weight_decay
-            },
-            {
-                "params": parameters_sec,
-                "weight_decay": 0.0
-            }
+            {"params": parameters_first, "weight_decay": self.hparams.weight_decay},
+            {"params": parameters_sec, "weight_decay": 0.0},
         ]
 
         optimizer = AdamW(
             optimizer_grouped_parameters,
             lr=self.hparams.learning_rate,
-            eps=self.hparams.adam_epsilon
+            eps=self.hparams.adam_epsilon,
         )
         self.opt = optimizer
         scheduler = self.get_lr_scheduler()
@@ -661,8 +618,7 @@ class CausalLMModule(MetaModule):
 
 
 def batch_split(row):
-    inner_loader = DataLoader(
-        row, batch_size=4, shuffle=False)
+    inner_loader = DataLoader(row, batch_size=4, shuffle=False)
     splited = [inner_batch for inner_batch in inner_loader]
     return splited
 
@@ -673,7 +629,7 @@ def batch_aggregate(rb):
         "input_ids": inputs,
         "attention_mask": masks,
         "token_type_ids": types,
-        "evaluate": False
+        "evaluate": False,
     }
     return train_feature
 
@@ -682,34 +638,34 @@ def get_features(device, batch, is_train: bool, accumulate: bool):
     """Get features from batch"""
     print_out = batch["print_out"]
     train_features = {
-        "input_ids": batch["train_input_ids"].to(
-            torch.device(device)),
-        "attention_mask": batch["train_attention_mask"].to(
-            torch.device(device)),
-        "token_type_ids": batch["train_token_type_ids"].to(
-            torch.device(device)),
-        "evaluate": False
+        "input_ids": batch["train_input_ids"].to(torch.device(device)),
+        "attention_mask": batch["train_attention_mask"].to(torch.device(device)),
+        "evaluate": False,
     }
+    if "train_token_type_ids" in batch:
+        train_features["token_type_ids"] = batch["train_token_type_ids"].to(
+            torch.device(device)
+        )
 
     if "train_labels" in batch:
-        train_features["labels"] = batch["train_labels"].to(
-            torch.device(device))
+        train_features["labels"] = batch["train_labels"].to(torch.device(device))
 
     dev_features = {
-        "input_ids": batch["input_ids"].to(
-            torch.device(device)),
-        "attention_mask": batch["attention_mask"].to(
-            torch.device(device)),
-        "token_type_ids": batch["token_type_ids"].to(
-            torch.device(device)),
-        "evaluate": not is_train
+        "input_ids": batch["input_ids"].to(torch.device(device)),
+        "attention_mask": batch["attention_mask"].to(torch.device(device)),
+        "evaluate": not is_train,
     }
 
+    if "token_type_ids" in batch:
+        dev_features["token_type_ids"] = batch["token_type_ids"].to(
+            torch.device(device)
+        )
+    if "labels" in batch:
+        dev_features["labels"] = batch["labels"].to(torch.device(device))
+
     if accumulate:
-        data_keys = ["train_input_ids",
-                     "train_attention_mask", "train_token_type_ids"]
+        data_keys = ["train_input_ids", "train_attention_mask", "train_token_type_ids"]
         rebatch = [batch_split(batch[key]) for key in data_keys]
-        train_features = [
-            batch_aggregate(rb) for rb in zip(*rebatch)]
+        train_features = [batch_aggregate(rb) for rb in zip(*rebatch)]
 
     return train_features, dev_features, print_out

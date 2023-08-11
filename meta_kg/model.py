@@ -1,4 +1,5 @@
 import re
+import random
 import string
 import torch
 import wandb
@@ -16,15 +17,16 @@ from transformers import (
     AutoTokenizer,
     GPT2LMHeadModel,
     AutoModelForCausalLM,
-    GenerationConfig
+    T5ForConditionalGeneration,
+    GenerationConfig,
 )
 
-from meta_kg.utils.py_io import write_json
+from meta_kg.utils.py_io import write_json, write_jsonl
 
 model_class_registry = {
+    "t5": T5ForConditionalGeneration,
     "gpt2": GPT2LMHeadModel,
     "gptj": AutoModelForCausalLM,
-    "gpt-neo": AutoModelForCausalLM,
 }
 
 
@@ -44,17 +46,7 @@ class CausalLM(nn.Module):
     @staticmethod
     def freeze_params(model):
         for name, param in model.named_parameters():
-            if np.any([x in name for x in [
-                '.0.', '.1.', '.2.', '.3.',
-                '.4.', '.5.', '.6.', '.7.',
-                '.8.', '.9.', '.10.', '.11.',
-                '.12.', '.13.', '.14.', '.15.',
-                '.16.', '.17.', '.18.', '.19.',
-                '.20.', '.21.', '.22.', '.23.',
-                '.24.', '.25.', '.26.', '.27.',
-                '.28.', '.29.', '.30.', '.31.',
-                '.32.'
-            ]]):
+            if np.any([x in name for x in [f".{i}." for i in range(42)]]):
                 print(f"Freezing {name}")
                 param.requires_grad = False
 
@@ -88,12 +80,9 @@ class CausalLM(nn.Module):
         :rtype: tuple
         """
         metrics = {}
-        sout = TranslationOutput.from_output(
-            self.global_config, raw_output)
+        sout = TranslationOutput.from_output(self.global_config, raw_output)
         scores = sout.compute_metrics()
         metrics.update(scores)
-        # class_scores = sout.fine_grained_metrics()
-        # metrics.update(class_scores)
         return (sout, metrics)
 
     def evaluate_output(self, output, out_file=None, metric_file=None, is_test=False):
@@ -113,8 +102,7 @@ class CausalLM(nn.Module):
 
             exp_name = self.global_config.wandb_name
             acc = metrics["acc_label"] if "acc_label" in metrics else metrics["acc"]
-            artifact = wandb.Artifact(
-                f"{exp_name}-eval_out-{acc}", type='dataset')
+            artifact = wandb.Artifact(f"{exp_name}-eval_out-{acc}", type="dataset")
             artifact.add_file(out_file)
             wandb.run.log_artifact(artifact)
 
@@ -124,11 +112,87 @@ class CausalLM(nn.Module):
             write_json(metrics, metric_file)
 
             if is_test:
-                artifact = wandb.Artifact(f"test_metrics", type='dataset')
+                artifact = wandb.Artifact(f"test_metrics", type="dataset")
                 artifact.add_file(out_file)
                 wandb.run.log_artifact(artifact)
 
         return metrics
+
+
+class MetaReasonSeq2Seq(CausalLM):
+    def forward(self, features, print_out, is_inner=False):
+        """A modified version of forward method for the underlying transformer model.
+        :param features: the target inputs
+        :param print_out: data to print out during evaluation
+        """
+        main_out = {"print_out": print_out}
+        labels = (
+            features["input_ids"]
+            if "gpt" in self.global_config.model_type
+            else features["labels"]
+        )
+
+        outputs = self.model(
+            input_ids=features["input_ids"],
+            attention_mask=features["attention_mask"],
+            labels=labels,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+        main_out["loss"] = outputs["loss"]
+
+        if "evaluate" in features and features["evaluate"]:
+            if "question" in print_out:
+                main_out["print_out"]["gen_out"] = self.generate(print_out)
+            else:
+                main_out["print_out"]["gen_out"] = self.generate(
+                    main_out["print_out"]["prompt"]
+                )
+        return main_out
+
+    def preprocess_generation(self, print_out):
+        output_length = []
+        for answer in print_out["answer"]:
+            out_ids = self.tokenizer(answer, return_tensors="pt").input_ids
+            output_length.append(out_ids.size(1))
+        max_out_length = max(output_length)
+
+        input_ids_batch = []
+        for question in print_out["question"]:
+            input_ids = self.tokenizer(question, return_tensors="pt").input_ids.to(
+                self.model.device
+            )
+            input_ids_batch.append(input_ids)
+
+        return input_ids_batch, max_out_length
+
+    def generate_step(self, input_ids, max_out_length):
+        generation_config = GenerationConfig.from_pretrained(
+            "t5-small",
+            num_beams=5,
+            max_new_tokens=max_out_length,
+            early_stopping=True,
+            top_p=None,
+            do_sample=False,
+            num_return_sequences=1,
+        )
+
+        greedy_output = self.model.generate(
+            input_ids=input_ids, generation_config=generation_config
+        )
+        out = self.tokenizer.decode(greedy_output[0], skip_special_tokens=True).strip()
+
+        return out
+
+    def generate(self, print_out):
+        input_ids_batch, max_out_length = self.preprocess_generation(print_out)
+
+        outputs = [
+            self.generate_step(input_ids, max_out_length)
+            for input_ids in input_ids_batch
+        ]
+
+        return outputs
 
 
 class MetaReasonLM(CausalLM):
@@ -144,10 +208,7 @@ class MetaReasonLM(CausalLM):
         label_mask = features["token_type_ids"][..., 1:].contiguous()
 
         loss_fct = nn.CrossEntropyLoss(reduction="none")
-        losses = loss_fct(
-            logits.view(-1, logits.size(-1)),
-            labels.view(-1)
-        )
+        losses = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
         losses = losses.view(logits.size(0), logits.size(1)) * label_mask
         loss = torch.sum(losses, axis=1) / torch.sum(label_mask, axis=1)
         return loss
@@ -158,14 +219,19 @@ class MetaReasonLM(CausalLM):
         :param print_out: data to print out during evaluation
         """
         main_out = {"print_out": print_out}
-        labels = features["input_ids"] if "gpt" in self.global_config.model_type else features["labels"]
+        labels = (
+            features["input_ids"]
+            if "gpt" in self.global_config.model_type
+            else features["labels"]
+        )
 
         outputs = self.model(
             input_ids=features["input_ids"],
             attention_mask=features["attention_mask"],
             labels=labels,
             output_hidden_states=True,
-            return_dict=True)
+            return_dict=True,
+        )
         lm_logits = outputs["logits"]
 
         loss = self.compute_loss(features, lm_logits)
@@ -176,9 +242,10 @@ class MetaReasonLM(CausalLM):
                 main_out["print_out"]["gen_out"] = self.generate(print_out)
             else:
                 main_out["print_out"]["gen_out"] = self.generate(
-                    main_out["print_out"]["prompt"])
+                    main_out["print_out"]["prompt"]
+                )
         return main_out
-    
+
     def preprocess_generation(self, print_out):
         output_length = []
         for answer in print_out["answer"]:
@@ -188,51 +255,72 @@ class MetaReasonLM(CausalLM):
 
         input_ids_batch = []
         for question in print_out["question"]:
-            input_ids = self.tokenizer(
-                question, return_tensors="pt").input_ids.to(self.model.device)
+            input_ids = self.tokenizer(question, return_tensors="pt").input_ids.to(
+                self.model.device
+            )
             input_ids_batch.append(input_ids)
-        
+
         return input_ids_batch, max_out_length
-    
-    def generate_step(self, input_ids, max_out_length):
+
+    def generate_step(self, input_ids, max_out_length, tokenizer):
         generation_config = GenerationConfig.from_pretrained(
             "gpt2",
             max_new_tokens=max_out_length,
-            num_beams=5,
             early_stopping=True,
             top_p=None,
             do_sample=False,
             num_return_sequences=1,
-            pad_token_id=self.tokenizer.eos_token_id,
+            pad_token_id=tokenizer.eos_token_id,
         )
+
+        whitelist = ["yes", "no", "none"]
+        if self.global_config.condition:
+            whitelist_ids = [tokenizer.encode(word)[0] for word in whitelist]
+            bad_words_ids = [
+                [id] for id in range(tokenizer.vocab_size) if id not in whitelist_ids
+            ]
+            generation_config.bad_words_ids = bad_words_ids
+            generation_config.max_new_tokens = 1
+
         greedy_output = self.model.generate(
-            input_ids=input_ids,
-            generation_config=generation_config)
+            input_ids=input_ids, generation_config=generation_config
+        )
+
         out = self.tokenizer.decode(
-            greedy_output[0][input_ids.shape[1]:],
-            skip_special_tokens=True)
+            greedy_output[0][input_ids.shape[1] :], skip_special_tokens=True
+        ).strip()
+
         return out
 
     def generate(self, print_out):
         input_ids_batch, max_out_length = self.preprocess_generation(print_out)
-        
+
+        if self.global_config.condition:
+            tokenizer = AutoTokenizer.from_pretrained(
+                self.global_config.model_name_or_path, add_prefix_space=True
+            )
+        else:
+            tokenizer = self.tokenizer
+
         # if self.global_config.do_qualitative:
         #     outputs = []
         #     for question, facts, input_ids, hop, label in input_ids_batch:
         #         out = self.generate_step(input_ids, max_out_length)
-        #         outputs.append({
-        #             "question": question,
-        #             "facts": facts,
-        #             "gen_out": out,
-        #             "label": label,
-        #             "hop": hop
-        #         })
+        #         outputs.append(
+        #             {
+        #                 "question": question,
+        #                 "facts": facts,
+        #                 "gen_out": out,
+        #                 "label": label,
+        #                 "hop": hop,
+        #             }
+        #         )
 
         #     out_file = f"{self.global_config.output_dir}/{self.global_config.dataset}-qualitative.jsonl"
         #     write_jsonl(outputs, out_file)
         # else:
         outputs = [
-            self.generate_step(input_ids, max_out_length)
+            self.generate_step(input_ids, max_out_length, tokenizer)
             for input_ids in input_ids_batch
         ]
 
@@ -242,10 +330,10 @@ class MetaReasonLM(CausalLM):
         main_out["token_loss"] = []
         for i in range(losses.size(0)):
             main_out["token_loss"].append(
-                self.compute_token_loss(losses[i], labels[i]*label_mask[i]))
+                self.compute_token_loss(losses[i], labels[i] * label_mask[i])
+            )
         norm_logits = torch.softmax(logits, dim=-1)
-        batch_topk_tokens = self.get_tok_tokens(
-            norm_logits, labels, label_mask)
+        batch_topk_tokens = self.get_tok_tokens(norm_logits, labels, label_mask)
         main_out["print_out"]["topk_tokens"] = [batch_topk_tokens]
 
     def get_tok_tokens(self, norm_logits, input_ids, label_mask):
@@ -255,7 +343,8 @@ class MetaReasonLM(CausalLM):
             norm_logits_item = norm_logits[i] * label_mask[i].unsqueeze(-1)
             prob_locs = torch.nonzero(norm_logits_item)[:, 0].unique()
             topk_tokens = self.get_token_prob(
-                prob_locs, norm_logits_item, input_ids_item)
+                prob_locs, norm_logits_item, input_ids_item
+            )
             batch_topk_tokens.append(topk_tokens)
         return batch_topk_tokens
 
@@ -288,14 +377,15 @@ class MetaReasonLM(CausalLM):
         return token_loss
 
 
-@ dataclass
+@dataclass
 class TranslationOutput:
     """Helper class for translation output"""
+
     config: Dict
     print_data: Dict
     labels: List[str]
 
-    @ classmethod
+    @classmethod
     def from_output(cls, config, output, labels=None):
         """Loads from raw outputs
 
@@ -306,7 +396,7 @@ class TranslationOutput:
 
         return cls(config=config, print_data=print_data, labels=labels)
 
-    @ classmethod
+    @classmethod
     def get_print_data(cls, output, print_key):
         print_data = {}
         print_out_keys = set(
@@ -314,8 +404,10 @@ class TranslationOutput:
         )
 
         for key_name in print_out_keys:
-            raw_data = [t[print_key][key_name]
-                        if key_name in t[print_key] else [] for t in output]
+            raw_data = [
+                t[print_key][key_name] if key_name in t[print_key] else []
+                for t in output
+            ]
             print_data[key_name] = [t for t in itertools.chain(*raw_data)]
 
         inner_outs = []
@@ -328,19 +420,19 @@ class TranslationOutput:
 
         return print_data
 
-    @ property
+    @property
     def prefixes(self):
         return self.print_data.get("prefix", [])
 
-    @ property
+    @property
     def questions(self):
         return self.print_data.get("question", [])
 
-    @ property
+    @property
     def targets(self):
         return self.print_data.get("answer", [])
 
-    @ property
+    @property
     def outputs(self):
         return self.print_data.get("gen_out", [])
 
@@ -355,8 +447,8 @@ class TranslationOutput:
             if c not in class_count:
                 continue
             class_metrics[c] = {}
-            class_metrics[c]['acc'] = 0
-            class_metrics[c]['f1'] = 0
+            class_metrics[c]["acc"] = 0
+            class_metrics[c]["f1"] = 0
 
         metrics = {}
         if targets and outputs and len(targets) == len(outputs):
@@ -364,14 +456,13 @@ class TranslationOutput:
                 em = self.compute_exact_match(gen, label)
                 f1 = self.compute_f1(gen, label)
                 if label in class_metrics:
-                    class_metrics[label]['acc'] += em
-                    class_metrics[label]['f1'] += f1
+                    class_metrics[label]["acc"] += em
+                    class_metrics[label]["f1"] += f1
 
             for label in class_metrics:
                 for metric in class_metrics[label]:
                     total_score = class_metrics[label][metric]
-                    metrics[f"{metric}_{label}"] = total_score / \
-                        class_count[label]
+                    metrics[f"{metric}_{label}"] = total_score / class_count[label]
 
         return metrics
 
@@ -388,24 +479,30 @@ class TranslationOutput:
 
         metrics = {}
         if targets and preds and len(targets) == len(preds):
-            em_scores = [self.compute_exact_match(
-                gen, label) for label, gen in zip(targets, preds)]
-            f1_scores = [self.compute_f1(gen, label)
-                         for label, gen in zip(targets, preds)]
+            em_scores = [
+                self.compute_exact_match(gen, label)
+                for label, gen in zip(targets, preds)
+            ]
+            f1_scores = [
+                self.compute_f1(gen, label) for label, gen in zip(targets, preds)
+            ]
 
             metrics["acc"] = sum(em_scores) / len(targets)
             metrics["f1"] = sum(f1_scores) / len(targets)
 
             if "because" in targets[0]:
-                labels = [t.split('because')[0].strip() for t in targets]
+                labels = [t.split("because")[0].strip() for t in targets]
                 gen_labels = [self.clean_gen_label(pred) for pred in preds]
-                em_label = [self.compute_exact_match(
-                    gen, label) for label, gen in zip(labels, gen_labels)]
+                em_label = [
+                    self.compute_exact_match(gen, label)
+                    for label, gen in zip(labels, gen_labels)
+                ]
 
-                eval_paris = [self.post_process(gen, target)
-                              for gen, target in zip(preds, targets)]
-                em_kg = [self.recall_score(gen, kg)
-                         for gen, kg, _ in eval_paris]
+                eval_paris = [
+                    self.post_process(gen, target)
+                    for gen, target in zip(preds, targets)
+                ]
+                em_kg = [self.recall_score(gen, kg) for gen, kg, _ in eval_paris]
                 num_gen_kgs = sum([len(gen) for gen, _, _ in eval_paris])
 
                 metrics["acc_label"] = sum(em_label) / len(targets)
@@ -438,6 +535,7 @@ class TranslationOutput:
 
     def normalize_text(self, text):
         """Removing articles and punctuation, and standardizing whitespace are all typical text processing steps."""
+
         def remove_articles(text):
             regex = re.compile(r"\b(a|an|the)\b", re.UNICODE)
             return re.sub(regex, " ", text)
@@ -455,7 +553,9 @@ class TranslationOutput:
         return white_space_fix(remove_articles(remove_punc(lower(text))))
 
     def recall_score(self, gen, kg):
-        return sum([int(self.normalize_text(p) in self.normalize_text(kg)) for p in gen])
+        return sum(
+            [int(self.normalize_text(p) in self.normalize_text(kg)) for p in gen]
+        )
 
     def compute_exact_match(self, prediction, truth):
         return int(self.normalize_text(truth) == self.normalize_text(prediction))
@@ -476,14 +576,12 @@ class TranslationOutput:
 
         return 2 * (prec * rec) / (prec + rec)
 
-    @ property
+    @property
     def generative(self):
         return True
 
     def enumerate_instances(self):
-        """Enumerate through instances for printing
-
-        """
+        """Enumerate through instances for printing"""
         guids = self.print_data["guid"]
         prefixes = self.prefixes
 
@@ -503,7 +601,7 @@ class TranslationOutput:
         for k, identifier in enumerate(guids):
             instance_dict = {}
             instance_dict["guid"] = identifier
-            instance_dict["prefix"] = prefixes[k]
+            # instance_dict["prefix"] = prefixes[k]
             instance_dict["question"] = text_in[k]
             instance_dict["gen_out"] = outputs[k]
             instance_dict["answer"] = targets[k]
