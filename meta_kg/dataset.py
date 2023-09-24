@@ -14,14 +14,6 @@ def kg_span_reconstruction(text):
         masked.replace(token, f"<extra_id_{i}>")
     return masked
 
-
-def kg_span_reconstruction(text):
-    masked = text
-    for i, token in enumerate(text.split(" ")):
-        masked.replace(token, f"<extra_id_{i}>")
-    return masked
-
-
 class DataReader:
     """Custom dataset loader for QA problems."""
 
@@ -76,31 +68,29 @@ class ProofWriterDataReader(DataReader):
         :rtype instance: situation_modeling.readers.input_example.InputBase
         """
         answer_map = {"true": "yes", "false": "no", "unknown": "none"}
-        answer_map = {"true": "yes", "false": "no", "unknown": "none"}
+
         guid = instance["guid"]
         question = instance["question"].replace(".", "")
-        if "all_facts" in instance:
-            context = [k.replace(".", " ") for k in instance["all_facts"]]
-        else:
-            context = [k.replace(".", " ") for k in instance["facts"]]
-
-        kgs = [k.replace(".", " ") for k in instance["facts"]]
-        distractors = list(set(context) - set(kgs))
-
-        if args.load_order == "pre":
-            context = kgs + distractors
-        elif args.load_order == "post":
-            context = distractors + kgs
-        elif args.load_order == "in":
-            random.shuffle(context)
-
         answer = answer_map[instance["answer"]]
 
-        fact_enum = [f"fact_{i}" for i in range(len(context))]
-        prefix = f"Based on {' '.join(fact_enum)}"
+        if "all_facts" in instance:
+            context = [k.replace(".", "") for k in instance["all_facts"]]
+            criticals = [k.replace(".", "") for k in instance["facts"]]
+            distractors = list(set(context) - set(criticals))
+            if args.load_order == "pre":
+                context = criticals + distractors
+            elif args.load_order == "post":
+                context = distractors + criticals
+            elif args.load_order == "in":
+                random.shuffle(context)
+        else:
+            context = [k.replace(".", "") for k in instance["facts"]]
+
         if args.baseline:
             qa_pairs = [[question, answer]]
         else:
+            fact_enum = [f"fact_{i}" for i in range(len(context))]
+            prefix = f"Based on {' '.join(fact_enum)}"
             qa_pairs = [[f"{prefix}, can we conclude {question}?", answer]]
 
         if args.multi_task:
@@ -108,11 +98,9 @@ class ProofWriterDataReader(DataReader):
                 item[1] = f"{item[1]} because {','.join(context)}"
 
         if not args.baseline:
-            facts = [f"fact_{i}: {fact}" for i, fact in enumerate(context)]
-        else:
-            facts = context
+            context = [f"fact_{i}: {fact}" for i, fact in enumerate(context)]
 
-        return [{"guid": guid, "qa_pairs": [item], "facts": facts} for item in qa_pairs]
+        return [{"guid": guid, "qa_pairs": [item], "facts": context} for item in qa_pairs]
 
 
 class ClutrrDataReader(DataReader):
@@ -126,20 +114,17 @@ class ClutrrDataReader(DataReader):
         :param args: the configuration arguments
         :rtype instance: situation_modeling.readers.input_example.InputBase
         """
-        question = instance["questions"][0]
-        facts = instance["facts"]
         guid = instance["guid"]
-        # answer = instance["answer"]
-        answer = question[1]
-        question = question[0]
+        question = instance["questions"]
+        facts = instance["facts"]
+        answer = instance["answer"]
 
-        qa_pairs = []
-        fact_enum = [f"fact_{i}" for i in range(len(facts))]
-        prefix = f"Based on {' '.join(fact_enum)}"
         if args.baseline:
-            qa_pairs.append([question, answer])
+            qa_pairs = [[question, answer]]
         else:
-            qa_pairs.append([f"{prefix}, {question}", answer])
+            fact_enum = [f"fact_{i}" for i in range(len(facts))]
+            prefix = f"Based on {' '.join(fact_enum)}"
+            qa_pairs = [[f"{prefix}, {question}", answer]]
 
         if args.multi_task:
             for item in qa_pairs:
@@ -147,10 +132,7 @@ class ClutrrDataReader(DataReader):
         if not args.baseline:
             facts = [f"fact_{i}: {fact}" for i, fact in enumerate(facts)]
 
-        batch = [
-            {"guid": guid, "qa_pairs": [item], "facts": facts} for item in qa_pairs
-        ]
-        return batch
+        return [{"guid": guid, "qa_pairs": [item], "facts": facts} for item in qa_pairs]
 
 
 class FolioDataReader(DataReader):
@@ -175,11 +157,11 @@ class FolioDataReader(DataReader):
         context = instance["facts"]
         answer = answer_map[instance["answer"]]
 
-        fact_enum = [f"fact_{i}" for i in range(len(context))]
-        prefix = f"Based on {' '.join(fact_enum)}"
         if args.baseline:
             qa_pairs = [[question, answer]]
         else:
+            fact_enum = [f"fact_{i}" for i in range(len(context))]
+            prefix = f"Based on {' '.join(fact_enum)}"
             qa_pairs = [[f"{prefix}, can we conclude {question}?", answer]]
 
         if args.multi_task:
@@ -187,11 +169,9 @@ class FolioDataReader(DataReader):
                 item[1] = f"{item[1]} because {','.join(context)}"
 
         if not args.baseline:
-            facts = [f"fact_{i}: {fact}" for i, fact in enumerate(context)]
-        else:
-            facts = context
+            context = [f"fact_{i}: {fact}" for i, fact in enumerate(context)]
 
-        return [{"guid": guid, "qa_pairs": [item], "facts": facts} for item in qa_pairs]
+        return [{"guid": guid, "qa_pairs": [item], "facts": context} for item in qa_pairs]
 
 
 class EntailmentTreeDataReader:
@@ -300,8 +280,6 @@ class MetaKnowledgeDataset(object):
         self.dataloader = meta_dataloader.dataloader
         return self.dataloader
 
-
-class MetaDataLoader:
 class MetaDataLoader:
     def __init__(self, args, dataset, tokenizer, is_training):
         self.args = args
@@ -360,11 +338,7 @@ class MetaDataLoader:
         attention_mask = torch.LongTensor(
             [1] * (ids1.size(1) + ids2.size(1)) + [0] * n_mask
         ).unsqueeze(0)
-            [1] * (ids1.size(1) + ids2.size(1)) + [0] * n_mask
-        ).unsqueeze(0)
         token_type_ids = torch.LongTensor(
-            [0] * ids1.size(1) + [1] * ids2.size(1) + [0] * n_mask
-        ).unsqueeze(0)
             [0] * ids1.size(1) + [1] * ids2.size(1) + [0] * n_mask
         ).unsqueeze(0)
 
@@ -425,13 +399,8 @@ class MetaDataLoader:
 
         input_ids_batch, attention_mask_batch, token_type_ids_batch = [], [], []
         for txt_in, txt_out in inputs:
-        for txt_in, txt_out in inputs:
             input_ids, attention_mask, token_type_ids = self._tensorize(
-                txt_in, txt_out, max_length
-            )
-                txt_in, txt_out, max_length
-            )
-
+                txt_in, txt_out, max_length)
             input_ids_batch.append(input_ids)
             attention_mask_batch.append(attention_mask)
             token_type_ids_batch.append(token_type_ids)
