@@ -1,10 +1,7 @@
 # @package _global_
 
 defaults:
-  - override /meta: default.yaml
-
-# EleutherAI/gpt-j-6b
-# gpt2-xl
+  - override /default: default.yaml
 
 model_type: t5
 model_name_or_path: t5-small
@@ -12,7 +9,6 @@ model_name_or_path: t5-small
 # experiment param:
 do_train: true
 do_eval: false
-do_qualitative: false
 
 multi_task: true
 baseline: false
@@ -20,7 +16,7 @@ use_lora: false
 freeze_partial: false
 condition: false
 
-wandb_name: gpt2-multi
+wandb_name: t5-multi
 wandb_project: meta-knowledge
 
 # checkpoint param:

@@ -9,7 +9,6 @@ model_name_or_path: gpt2
 # experiment param:
 do_train: true
 do_eval: false
-do_qualitative: false
 
 multi_task: true
 baseline: false
