@@ -2,7 +2,7 @@
 
 defaults:
   - _self_
-  - meta: default.yaml
+  - default: default.yaml
   - experiment: null
 
 device_idx: 0
