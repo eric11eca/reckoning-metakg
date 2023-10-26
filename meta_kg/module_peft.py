@@ -1,18 +1,20 @@
 import numpy as np
-
-from peft import get_peft_model, PrefixTuningConfig, LoraConfig, TaskType
+import logging
 
 from torch.optim import AdamW
+from peft import get_peft_model, PrefixTuningConfig, LoraConfig, TaskType
+from meta_kg.module import MetaLearnerModule, CausalLMModule
 
-from meta_kg.module import MetaReasonLMModule, CausalLMModule
+util_logger = logging.getLogger("meta_knowledge.module_peft")
 
-
-class KGMAMLPrefixModule(MetaReasonLMModule):
+class MetaLMPrefixModule(MetaLearnerModule):
+    """The MetaLMPrefixModule class implements the Meta-LM model with prefix tuning."""
     def __init__(self, config):
         super().__init__(config)
 
         peft_config = PrefixTuningConfig(
-            task_type=TaskType.CAUSAL_LM, num_virtual_tokens=config.prefix_dim
+            task_type=TaskType.CAUSAL_LM,
+            num_virtual_tokens=config.prefix_dim
         )
         self.model.model = get_peft_model(self.model.model, peft_config)
 
@@ -34,10 +36,10 @@ class KGMAMLPrefixModule(MetaReasonLMModule):
         self.num_prefix_params = len(self.prefix_params)
         self.num_model_params = len(self.model_params)
 
-        # util_logger.info(
-        #     f"Number of prefix parameters: {self.num_prefix_params}")
-        # util_logger.info(
-        #     f"Number of model parameters: {self.num_model_params}")
+        util_logger.info(
+            f"Number of prefix parameters: {self.num_prefix_params}")
+        util_logger.info(
+            f"Number of model parameters: {self.num_model_params}")
 
     def set_model_params_grad(self, grad: bool = True):
         for _, param in self.model_params.items():
@@ -84,7 +86,10 @@ class KGMAMLPrefixModule(MetaReasonLMModule):
         return [optimizer], [scheduler]
 
 
-class KGMAMLLoraModule(MetaReasonLMModule):
+class MetaLMLoraModule(MetaLearnerModule):
+    """
+    The MetaLMLoraModule class implements the Meta-LM model with LoRA.
+    """
     def __init__(self, config):
         super().__init__(config)
 
