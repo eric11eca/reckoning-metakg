@@ -1,6 +1,11 @@
+<p align="center">
+  <img src="./reckoning.png" alt="A robot is memorizing knowledge from books." title="reckoning-head" width=50% />
+</p>
+
 # RECKONING: Reasoning through Dynamic Knowledge Encoding
 
-This codebase contains the implementation of the paper [RECKONING: Reasoning through Dynamic Knowledge Encoding](https://arxiv.org/abs/2305.06349), in proceedings of the [NeurIPS 2023](https://nips.cc/) conference.
+
+This codebase contains the implementation of the paper [RECKONING: Reasoning through Dynamic Knowledge Encoding](https://arxiv.org/abs/2305.06349) in proceedings of the [NeurIPS 2023](https://nips.cc/) conference.
 
 ## Quick links
 
