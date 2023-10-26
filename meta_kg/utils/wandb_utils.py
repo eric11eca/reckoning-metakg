@@ -17,11 +17,11 @@ except NotImplementedError:
 
 
 def create_wandb_vars(config):
-    """Creates special environment variables for trainers and other utilities 
+    """Creates special environment variables for trainers and other utilities
     to use if such configuration values are provided
 
-    :param config: the global configuration values 
-    :raises: ValueError 
+    :param config: the global configuration values
+    :raises: ValueError
     """
     if config.wandb_name:
         os.environ["WANDB_NAME"] = config.wandb_name
@@ -36,9 +36,9 @@ def create_wandb_vars(config):
             (config.wandb_name, config.wandb_project, config.wandb_entity))
 
 def init_wandb_logger(config):
-    """Initializes the wandb logger 
+    """Initializes the wandb logger
 
-    :param config: the global configuration 
+    :param config: the global configuration
     """
     log_model = "all" if config.wandb_checkpoint else False
     wandb_logger = WandbLogger(
@@ -53,8 +53,8 @@ def init_wandb_logger(config):
 def download_wandb_data(config):
     """Downloads wandb data
 
-    :param config: the global configuration 
-    :rtype: None 
+    :param config: the global configuration
+    :rtype: None
     """
     entity = config.wandb_entity if config.wandb_entity else ""
     project = "data-collection"
@@ -72,7 +72,7 @@ def download_wandb_data(config):
 def download_wandb_models(config):
     """Downloads any models as needed
 
-    :param config: the global configuration 
+    :param config: the global configuration
     """
     model_name = config.checkpoint
     entity = config.wandb_entity if config.wandb_entity else ""
@@ -86,14 +86,14 @@ def download_wandb_models(config):
                    for f in os.listdir(artifact_dir) if '.ckpt' in f]
     if len(checkpoints) > 1:
         util_logger.warning('Multi-checkpoints found! Using first one...')
-    
+
     config.checkpoint = os.path.abspath(checkpoints[0])
 
 def setup_wandb(config):
     """Sets up wandb enviroment variables, downloads datasets, models, etc.. as needed
 
-    :param config: the global configuration 
-    :rtype: None 
+    :param config: the global configuration
+    :rtype: None
     """
     download_wandb_data(config)
 
@@ -101,7 +101,7 @@ def setup_wandb(config):
         download_wandb_models(config)
 
     if config.wandb_project or config.wandb_entity:
-        create_wandb_vars(config)    
+        create_wandb_vars(config)
 
 
 class WandbArtifactCallback(pl.Callback):

@@ -3,9 +3,8 @@ import higher
 import logging
 import pytorch_lightning as pl
 
-from omegaconf import OmegaConf
-
 from typing import Dict
+from omegaconf import OmegaConf
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from transformers import get_linear_schedule_with_warmup
@@ -15,7 +14,6 @@ from meta_kg.model import MetaReasonLM, MetaReasonSeq2Seq
 from meta_kg.optimizer import LSLRSchedular
 
 util_logger = logging.getLogger("meta_knowledge.module")
-
 
 class MetaModule(pl.LightningModule):
     def __init__(self, config, logger):
@@ -28,10 +26,8 @@ class MetaModule(pl.LightningModule):
         super().__init__()
         self.model_logger = logger
         self.hparams.update(OmegaConf.to_container(config))
-
         self.global_trainin_step = 0
         self.global_epoch_counter = 0
-
         self.training_step_outputs = []
         self.validation_step_outputs = []
         self.test_step_outputs = []
@@ -142,7 +138,7 @@ class MetaModule(pl.LightningModule):
             self.model_logger,
             self.hparams,
             self.tokenizer,
-            self.hparams.train_dir,
+            self.hparams.data_dir,
             data_type="train",
             is_training=True,
         )
@@ -150,15 +146,15 @@ class MetaModule(pl.LightningModule):
             self.model_logger,
             self.hparams,
             self.tokenizer,
-            self.hparams.train_dir,
-            data_type="test",
+            self.hparams.data_dir,
+            data_type="val",
             is_training=False,
         )
         self.test_data = MetaKnowledgeDataset(
             self.model_logger,
             self.hparams,
             self.tokenizer,
-            self.hparams.train_dir,
+            self.hparams.data_dir,
             data_type="test",
             is_training=False,
         )
@@ -192,7 +188,7 @@ class MetaModule(pl.LightningModule):
         return dataloader
 
 
-class MetaReasonLMModule(MetaModule):
+class MetaLearnerModule(MetaModule):
     def __init__(self, config):
         super().__init__(config, util_logger)
         util_logger.info("Running KG-MAML model")
@@ -209,11 +205,9 @@ class MetaReasonLMModule(MetaModule):
 
     def inner_lr_schedular_config(self, n_inner_iter, inner_lr):
         self.inner_schedular = LSLRSchedular(
-            num_inner_iter=n_inner_iter, init_lr=inner_lr
-        )
+            num_inner_iter=n_inner_iter, init_lr=inner_lr)
         params_opt = list(
-            filter(lambda p: p[1].requires_grad, self.model.named_parameters())
-        )
+            filter(lambda p: p[1].requires_grad, self.model.named_parameters()))
         self.inner_schedular.initialization(self.model.named_parameters(), params_opt)
 
     def inner_loop_step(self, features, print_out, fmodel, diffopt) -> Dict:
@@ -240,8 +234,6 @@ class MetaReasonLMModule(MetaModule):
             if self.hparams.dyna_lr:
                 self.inner_schedular.step(diffopt, named_params, iter)
             diffopt.step(train_loss)
-            # if self.hparams.do_qualitative:
-            #     fmodel.generate(print_out)
 
     def inner_loop_end(self, features, print_out, fmodel) -> Dict:
         """Runs a single inner loop step
@@ -412,7 +404,7 @@ class MetaReasonLMModule(MetaModule):
         return test_loss, outputs
 
 
-class KGMAMLModule(MetaReasonLMModule):
+class MetaLMModule(MetaLearnerModule):
     def __init__(self, config):
         super().__init__(config)
 
@@ -591,15 +583,11 @@ class CausalLMModule(MetaModule):
         """
         no_decay = ["bias", "LayerNorm.weight"]
         parameters_first = [
-            p
-            for n, p in self.model.named_parameters()
-            if not any(nd in n for nd in no_decay)
-        ]
+            p for n, p in self.model.named_parameters()
+            if not any(nd in n for nd in no_decay)]
         parameters_sec = [
-            p
-            for n, p in self.model.named_parameters()
-            if any(nd in n for nd in no_decay)
-        ]
+            p for n, p in self.model.named_parameters()
+            if any(nd in n for nd in no_decay)]
 
         optimizer_grouped_parameters = [
             {"params": parameters_first, "weight_decay": self.hparams.weight_decay},
@@ -611,6 +599,7 @@ class CausalLMModule(MetaModule):
             lr=self.hparams.learning_rate,
             eps=self.hparams.adam_epsilon,
         )
+
         self.opt = optimizer
         scheduler = self.get_lr_scheduler()
 
@@ -618,12 +607,21 @@ class CausalLMModule(MetaModule):
 
 
 def batch_split(row):
+    """Split a batch into multiple inner-loop batches
+
+    :param row: a batch of data
+    :rtype: list
+    """
     inner_loader = DataLoader(row, batch_size=4, shuffle=False)
     splited = [inner_batch for inner_batch in inner_loader]
     return splited
 
-
 def batch_aggregate(rb):
+    """Aggregate a batch of data
+
+    :param rb: a batch of data
+    :rtype: dict
+    """
     inputs, masks, types = rb[0], rb[1], rb[2]
     train_feature = {
         "input_ids": inputs,
@@ -635,7 +633,14 @@ def batch_aggregate(rb):
 
 
 def get_features(device, batch, is_train: bool, accumulate: bool):
-    """Get features from batch"""
+    """Get features from batch
+
+    :param device: device to run on
+    :param batch: the target batch
+    :param is_train: whether to run training or validation
+    :param accumulate: whether to accumulate gradient
+    :rtype: dict
+    """
     print_out = batch["print_out"]
     train_features = {
         "input_ids": batch["train_input_ids"].to(torch.device(device)),

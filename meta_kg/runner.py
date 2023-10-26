@@ -9,10 +9,10 @@ from meta_kg.utils.wandb_utils import setup_wandb
 
 from meta_kg.module import (
     CausalLMModule,
-    KGMAMLModule,
+    MetaLMModule,
 )
 
-from meta_kg.module_peft import KGMAMLLoraModule, CausalLoraModule
+from meta_kg.module_peft import MetaLMLoraModule, CausalLoraModule
 
 util_logger = logging.getLogger("meta_knowledge.runner")
 
@@ -35,10 +35,10 @@ def run(args):
         module_class = CausalLoraModule
         util_logger.info("Running LoRA baseline model")
     elif not args.baseline and args.use_lora:
-        module_class = KGMAMLLoraModule
+        module_class = MetaLMLoraModule
         util_logger.info("Running LoRA MAML model")
     else:
-        module_class = KGMAMLModule
+        module_class = MetaLMModule
         util_logger.info("Running MAML model")
 
     trainer = setup_trainer(args)

@@ -1,5 +1,4 @@
 import re
-import random
 import string
 import torch
 import wandb
@@ -28,7 +27,6 @@ model_class_registry = {
     "gpt2": GPT2LMHeadModel,
     "gptj": AutoModelForCausalLM,
 }
-
 
 class CausalLM(nn.Module):
     """
@@ -80,7 +78,7 @@ class CausalLM(nn.Module):
         :rtype: tuple
         """
         metrics = {}
-        sout = TranslationOutput.from_output(self.global_config, raw_output)
+        sout = GenerationOutput.from_output(self.global_config, raw_output)
         scores = sout.compute_metrics()
         metrics.update(scores)
         return (sout, metrics)
@@ -301,24 +299,6 @@ class MetaReasonLM(CausalLM):
             )
         else:
             tokenizer = self.tokenizer
-
-        # if self.global_config.do_qualitative:
-        #     outputs = []
-        #     for question, facts, input_ids, hop, label in input_ids_batch:
-        #         out = self.generate_step(input_ids, max_out_length)
-        #         outputs.append(
-        #             {
-        #                 "question": question,
-        #                 "facts": facts,
-        #                 "gen_out": out,
-        #                 "label": label,
-        #                 "hop": hop,
-        #             }
-        #         )
-
-        #     out_file = f"{self.global_config.output_dir}/{self.global_config.dataset}-qualitative.jsonl"
-        #     write_jsonl(outputs, out_file)
-        # else:
         outputs = [
             self.generate_step(input_ids, max_out_length, tokenizer)
             for input_ids in input_ids_batch
@@ -378,8 +358,8 @@ class MetaReasonLM(CausalLM):
 
 
 @dataclass
-class TranslationOutput:
-    """Helper class for translation output"""
+class GenerationOutput:
+    """Helper class for generation output"""
 
     config: Dict
     print_data: Dict
@@ -419,10 +399,6 @@ class TranslationOutput:
             print_data["inner_print_out"] = inner_outs
 
         return print_data
-
-    @property
-    def prefixes(self):
-        return self.print_data.get("prefix", [])
 
     @property
     def questions(self):
@@ -583,8 +559,6 @@ class TranslationOutput:
     def enumerate_instances(self):
         """Enumerate through instances for printing"""
         guids = self.print_data["guid"]
-        prefixes = self.prefixes
-
         text_in = self.print_data["question"]
         targets = self.targets
         outputs = self.outputs
@@ -601,7 +575,6 @@ class TranslationOutput:
         for k, identifier in enumerate(guids):
             instance_dict = {}
             instance_dict["guid"] = identifier
-            # instance_dict["prefix"] = prefixes[k]
             instance_dict["question"] = text_in[k]
             instance_dict["gen_out"] = outputs[k]
             instance_dict["answer"] = targets[k]
