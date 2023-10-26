@@ -1,9 +1,12 @@
+torch
 rich
 tqdm
 wandb
-torch
-pytorch-lightning
 transformers
 datasets
+sentencepiece
+pytorch-lightning
 scikit-learn
 hydra-core
+nltk
+vllm
