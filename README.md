@@ -84,11 +84,11 @@ Please cite our paper if you use RECKONING in your work:
 	url={https://openreview.net/forum?id=dUAcAtCuKk}
 }
 @misc{chen2023reckoning,
-      title={RECKONING: Reasoning through Dynamic Knowledge Encoding}, 
-      author={Zeming Chen and Gail Weiss and Eric Mitchell and Asli Celikyilmaz and Antoine Bosselut},
-      year={2023},
-      eprint={2305.06349},
-      archivePrefix={arXiv},
-      primaryClass={cs.CL}
+	title={RECKONING: Reasoning through Dynamic Knowledge Encoding}, 
+	author={Zeming Chen and Gail Weiss and Eric Mitchell and Asli Celikyilmaz and Antoine Bosselut},
+	year={2023},
+	eprint={2305.06349},
+	archivePrefix={arXiv},
+	primaryClass={cs.CL}
 }
 ```
