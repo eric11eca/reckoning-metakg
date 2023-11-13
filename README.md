@@ -20,7 +20,7 @@ This codebase contains the implementation of the paper [RECKONING: Reasoning thr
 ## Overview
 
 
-RECKONING, is a bi-level learning algorithm that teaches language models to reason by updating their parametric knowledge through back-propagation, allowing them to then answer questions using the updated parameters. 
+RECKONING is a bi-level learning algorithm that teaches language models to reason by updating their parametric knowledge through back-propagation, allowing them to answer questions using the updated parameters. 
 
 During training, the inner loop rapidly adapts a copy of the model weights to encode contextual knowledge into its parameters. In the outer loop, the model learns to use the updated weights to reproduce and answer reasoning questions about the memorized knowledge.
 
@@ -33,7 +33,7 @@ To run our code, please install all the dependency packages by using the followi
 ```
 pip install -r requirements.txt
 ```
-To get the newsest version of Higher, a meta-learning package, install from source through github:
+To get the newest version of Higher, a meta-learning package, install from source through GitHub:
 ```
 git clone git@github.com:facebookresearch/higher.git
 cd higher
@@ -53,7 +53,7 @@ No need to create new folders for recording the training results. Folders for ea
 python  run_maml.py  experiment=meta_train_gpt2
 ```
 
-The experiment name [meta_train_gpt2](https://github.com/eric11eca/reckoning-metakg/blob/main/config/experiment/meta_train_gpt2.yaml) is defined by users. It corresponds to the hydra configuration script for this experiment. The configuration files are stored in the `config` folder:
+Users define the experiment name [meta_train_gpt2](https://github.com/eric11eca/reckoning-metakg/blob/main/config/experiment/meta_train_gpt2.yaml). It corresponds to the hydra configuration script for this experiment. The configuration files are stored in the `config` folder:
 ```
 ├── config
 |	├── default
@@ -63,13 +63,13 @@ The experiment name [meta_train_gpt2](https://github.com/eric11eca/reckoning-met
 │   │   ├── ...
 │   ├── run.yaml
 ```
-**Note**: You can overwrite the default arguments in the experiment yaml files.
+**Note**: You can overwrite the default arguments in the experiment YAML files.
 
 
 ## Bugs or questions
-Note that this codebase is purely for the purpose of research and scientific experiments.  We expect    unknow bugs or issues cause by different versions of updates in the past. If you encounter any problems when using the code, or want to report a bug, you can open an issue. Please try to specify the problem with details so we can help you better and quicker! If you have any questions related to the code or the paper, feel free to email (`zeming.chen@epfl.ch`). 
+Note that this codebase is purely for the purpose of research and scientific experiments.  We expect unknown bugs or issues caused by different versions of updates in the past. If you encounter any problems when using the code or want to report a bug, you can open an issue. Please try to specify the problem with details so we can help you better and quicker! If you have any questions related to the code or the paper, feel free to email [zeming.chen@epfl.ch](`zeming.chen@epfl.ch`). 
 
-This repository will likely to be outdated soon as we plan to move to a  new Meta-Learning package called [Betty](https://github.com/leopard-ai/betty/tree/main) for better scalbility on the current LLM and distributed training requirements.
+This repository will likely be outdated soon as we plan to move to a  new Meta-Learning package called [Betty](https://github.com/leopard-ai/betty/tree/main) for better scalability on the current LLM and distributed training requirements.
 
 ## Citation
 
