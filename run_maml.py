@@ -19,12 +19,7 @@ from meta_kg.runner import run
 @hydra.main(version_base="1.3", config_path="./config", config_name="run.yaml")
 def main(args: DictConfig) -> Optional[float]:
     config_dict = OmegaConf.to_container(args, resolve=True)
-
-    if os.path.exists(args.output_dir) and os.listdir(args.output_dir):
-        print("Output directory () already exists and is not empty.")
-
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(args.output_dir, exist_ok=True)
 
     log_filename = "{}log.txt".format("" if args.do_train else "eval_")
     logging.basicConfig(
@@ -51,29 +46,26 @@ def main(args: DictConfig) -> Optional[float]:
     if not args.do_train and not args.do_eval:
         raise ValueError("At least one of `do_train` or `do_eval` must be True.")
 
-    if args.do_train:
-        if not args.train_dir:
-            raise ValueError(
-                "If `do_train` is True, then `train_dir` must be specified."
-            )
-        if not args.predict_dir:
-            raise ValueError(
-                "If `do_train` is True, then `predict_dir` must be specified."
-            )
-
-    if args.do_eval and not args.predict_dir:
-        raise ValueError("If `do_eval` is True, then `predict_dir` must be specified.")
-
     timestr = time.strftime("%Y%m%d-%H%M%S")
     run_dir = f"{args.output_dir}/{timestr}"
-    os.makedirs(run_dir, exist_ok=True)
+    gen_dir = f"{run_dir}/outputs"
+    eval_dir = f"{run_dir}/evals"
+    
+    # args.run_dir = f"{args.output_dir}/{args.run_name}-{args.run_id}/"
+    # os.makedirs(run_dir, exist_ok=True)
+    # os.makedirs(gen_dir, exist_ok=True)
+    # os.makedirs(eval_dir, exist_ok=True)
+    
+    # with open(os.path.join(run_dir, "config.yaml"), "w") as f:
+    #     OmegaConf.save(args, f)
 
     with open_dict(args):
         args.run_dir = run_dir
+        args.gen_dir = gen_dir
+        args.eval_dir = eval_dir
 
     args.wandb_name = f"{args.dataset.replace('owa_', '')}-{args.wandb_name}"
     run(args)
-
 
 if __name__ == "__main__":
     main()
