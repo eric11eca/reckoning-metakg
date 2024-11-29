@@ -1,19 +1,34 @@
+import os
+import yaml
 import torch
+import torch.distributed
 import higher
 import logging
-import pytorch_lightning as pl
+import lightning as pl
 
+from pathlib import Path
 from typing import Dict
 from omegaconf import OmegaConf
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from transformers import get_linear_schedule_with_warmup
+from transformers import get_cosine_schedule_with_warmup
 
-from meta_kg.dataset import MetaKnowledgeDataset
-from meta_kg.model import MetaReasonLM, MetaReasonSeq2Seq
+from meta_kg.dataset import MetaKnowledgeDataset, create_dataloader
+from meta_kg.model import CausalLM, MetaReasonSeq2Seq
 from meta_kg.optimizer import LSLRSchedular
+from meta_kg.inference import LLM_Generator
+from meta_kg.evaluate import eval
+from meta_kg.utils.py_io import write_generations, write_metrics
 
 util_logger = logging.getLogger("meta_knowledge.module")
+
+def reg_loss(parameters, reference_parameters, reg_lambda=0.2):
+    loss = 0
+    for p1, p2 in zip(parameters, reference_parameters):
+        loss += torch.sum(torch.pow((p1 - p2), 2))
+
+    return reg_lambda * loss
 
 class MetaModule(pl.LightningModule):
     def __init__(self, config, logger):
@@ -40,6 +55,45 @@ class MetaModule(pl.LightningModule):
         """
         self.global_epoch_counter += 1
 
+    def validation_eval(self, results):
+        if torch.distributed.is_initialized() and torch.distributed.get_rank() == 0:
+            gathered_args = [None] * torch.distributed.get_world_size()
+            torch.distributed.all_gather_object(gathered_args, self.hparams)
+            self.hparams.update(gathered_args[0])
+        metrics, _ = eval(results)
+
+        if torch.distributed.is_initialized() and torch.distributed.get_rank() == 0:
+            os.makedirs(self.hparams.run_dir, exist_ok=True)
+            os.makedirs(self.hparams.gen_dir, exist_ok=True)
+            os.makedirs(self.hparams.eval_dir, exist_ok=True)
+
+            config_name = os.path.join(self.hparams.run_dir, "config.yaml")
+            if not os.path.exists(config_name):
+                with open(config_name, "w") as f:
+                    yaml.dump(self.hparams, f)
+            log_name = f"outputs_{self.global_trainin_step}.jsonl"
+            write_generations(results, self.hparams.gen_dir, log_name)
+            log_name = f"eval_{self.global_trainin_step}.jsonl"
+            write_metrics(metrics, self.hparams.eval_dir, log_name)
+        elif not torch.distributed.is_initialized():
+            os.makedirs(self.hparams.run_dir, exist_ok=True)
+            os.makedirs(self.hparams.gen_dir, exist_ok=True)
+            os.makedirs(self.hparams.eval_dir, exist_ok=True)
+
+            config_name = os.path.join(self.hparams.run_dir, "config.yaml")
+            if not os.path.exists(config_name):
+                with open(config_name, "w") as f:
+                    yaml.dump(self.hparams, f)
+            log_name = f"outputs_{self.global_trainin_step}.jsonl"
+            write_generations(results, self.hparams.gen_dir, log_name)
+            log_name = f"eval_{self.global_trainin_step}.jsonl"
+            write_metrics(metrics, self.hparams.eval_dir, log_name)
+
+        # artifact = wandb.Artifact(f"test_metrics", type="dataset")
+        # artifact.add_file(output_dir)
+        # wandb.run.log_artifact(artifact)
+        return metrics
+
     def validation_epoch_logic(self, outputs):
         raise NotImplementedError
 
@@ -48,7 +102,13 @@ class MetaModule(pl.LightningModule):
         :param outputs: the outputs of the train step
         :rtype: None
         """
-        outputs = self.validation_step_outputs
+        if self.trainer.num_devices > 1:
+            outputs = [None for _ in range(torch.distributed.get_world_size())]
+            torch.distributed.all_gather_object(outputs, self.validation_step_outputs)
+            outputs = [item for sublist in outputs for item in sublist]
+        else:
+            outputs = self.validation_step_outputs
+
         if len(outputs) == 0:
             if self.hparams.multi_task:
                 self.log(f"val_acc_label", 0.50, on_epoch=True, prog_bar=False)
@@ -56,25 +116,19 @@ class MetaModule(pl.LightningModule):
                 self.log(f"val_acc", 0.50, on_epoch=True, prog_bar=False)
             return
 
-        val_loss, outputs = self.validation_epoch_logic(outputs)
-        self.log("val_loss", val_loss, on_epoch=True, prog_bar=True)
+        # if self.trainer.is_global_zero:
+        val_loss, generations = self.validation_epoch_logic(outputs)
+        self.log("val_loss", val_loss.to(self.device), on_epoch=True, prog_bar=True, sync_dist=True)
 
-        epoch = self.global_epoch_counter
-        step = self.global_trainin_step
+        metrics = {}
+        metrics = self.validation_eval(generations)
+        for key in metrics:
+            metrics[key] = round(metrics[key], 4)
 
-        out_file_name = f"dev_out-epoch={epoch}_step={step}.json"
-        metirc_file_name = f"val_metrics-epoch={epoch}_step={step}.json"
-
-        metrics_out = self.model.evaluate_output(
-            outputs,
-            f"{self.hparams.run_dir}/{out_file_name}",
-            f"{self.hparams.run_dir}/{metirc_file_name}",
-        )
+        for key, val in metrics.items():
+            self.log(f"val_{key}", torch.tensor(val).to(self.device), on_epoch=True, prog_bar=True, sync_dist=True)
 
         self.validation_step_outputs.clear()
-
-        for metric_name, metric_value in metrics_out.items():
-            self.log(f"val_{metric_name}", metric_value, on_epoch=True, prog_bar=True)
 
     def test_step(self, batch, batch_idx) -> Dict:
         test_out = self.validation_step(batch, batch_idx)
@@ -86,21 +140,17 @@ class MetaModule(pl.LightningModule):
 
     def on_test_epoch_end(self):
         outputs = self.test_step_outputs
-        test_loss, outputs = self.test_epoch_logic(outputs)
-        self.log("test_loss", test_loss, on_epoch=True, prog_bar=True)
+        val_loss, generations = self.test_epoch_logic(outputs)
+        self.log("test_loss", val_loss, on_epoch=True, prog_bar=True)
 
-        out_file_name = f"test_eval_out.json"
-        metirc_file_name = f"test_metrics.json"
+        metrics = {}
+        metrics = self.validation_eval(generations)
+        for key in metrics:
+            metrics[key] = round(metrics[key], 4)
 
-        metrics_out = self.model.evaluate_output(
-            outputs,
-            f"{self.hparams.run_dir}/{out_file_name}",
-            f"{self.hparams.run_dir}/{metirc_file_name}",
-        )
-
-        self.test_step_outputs.clear()
-        for metric_name, metric_value in metrics_out.items():
-            self.log(f"test_{metric_name}", metric_value, on_epoch=True, prog_bar=True)
+        self.validation_step_outputs.clear()
+        for key, val in metrics.items():
+            self.log(f"test_{key}", val, on_epoch=True, prog_bar=True)
 
     def get_lr_scheduler(self):
         """Sets up the optimizer learning rate scheduler"""
@@ -123,7 +173,7 @@ class MetaModule(pl.LightningModule):
             % (total_steps, str(self.hparams.warmup_steps))
         )
 
-        scheduler = get_linear_schedule_with_warmup(
+        scheduler = get_cosine_schedule_with_warmup(
             self.opt,
             num_warmup_steps=self.hparams.warmup_steps,
             num_training_steps=total_steps,
@@ -135,26 +185,23 @@ class MetaModule(pl.LightningModule):
         """Loads the dataset"""
         self.model_logger.info("Loading dataset")
         self.train_data = MetaKnowledgeDataset(
-            self.model_logger,
-            self.hparams,
-            self.tokenizer,
-            self.hparams.data_dir,
+            args=self.hparams,
+            tokenizer=self.tokenizer,
+            data_path=self.hparams.data_dir,
             data_type="train",
             is_training=True,
         )
         self.dev_data = MetaKnowledgeDataset(
-            self.model_logger,
-            self.hparams,
-            self.tokenizer,
-            self.hparams.data_dir,
-            data_type="val",
+            args=self.hparams,
+            tokenizer=self.tokenizer,
+            data_path=self.hparams.data_dir,
+            data_type="test",
             is_training=False,
         )
         self.test_data = MetaKnowledgeDataset(
-            self.model_logger,
-            self.hparams,
-            self.tokenizer,
-            self.hparams.data_dir,
+            args=self.hparams,
+            tokenizer=self.tokenizer,
+            data_path=self.hparams.data_dir,
             data_type="test",
             is_training=False,
         )
@@ -165,7 +212,7 @@ class MetaModule(pl.LightningModule):
 
         :rtype: DataLoader
         """
-        dataloader = self.train_data.load_dataloader()
+        dataloader = create_dataloader(self.hparams, self.train_data, is_training=True)
         self.model_logger.info("Length of training data loader %d" % len(dataloader))
         return dataloader
 
@@ -174,7 +221,7 @@ class MetaModule(pl.LightningModule):
 
         :rtype: DataLoader
         """
-        dataloader = self.dev_data.load_dataloader()
+        dataloader = create_dataloader(self.hparams, self.test_data, is_training=False)
         self.model_logger.info("Length of validation data loader %d" % len(dataloader))
         return dataloader
 
@@ -183,7 +230,7 @@ class MetaModule(pl.LightningModule):
 
         :rtype: DataLoader
         """
-        dataloader = self.test_data.load_dataloader()
+        dataloader = create_dataloader(self.hparams, self.test_data, is_training=False)
         self.model_logger.info("Length of test data loader %d" % len(dataloader))
         return dataloader
 
@@ -195,7 +242,7 @@ class MetaLearnerModule(MetaModule):
         if config.model_type == "t5":
             self.model = MetaReasonSeq2Seq.from_config(config)
         else:
-            self.model = MetaReasonLM.from_config(config)
+            self.model = CausalLM.from_config(config)
         self.tokenizer = self.model.tokenizer
         self.load_dataset()
         self.inner_lr_schedular_config(config.n_inner_iter, config.inner_lr)
@@ -210,30 +257,31 @@ class MetaLearnerModule(MetaModule):
             filter(lambda p: p[1].requires_grad, self.model.named_parameters()))
         self.inner_schedular.initialization(self.model.named_parameters(), params_opt)
 
-    def inner_loop_step(self, features, print_out, fmodel, diffopt) -> Dict:
+    def inner_loop_step(self, features, fmodel, diffopt) -> Dict:
         """Runs a single inner loop step
 
         :param features: the target batch
-        :param print_out: None in this step
         :param fmodel: the fast model
         :param diffopt: the optimizer
         :rtype: dict
         :returns: dictionary that includes loss
         """
         for iter in range(self.hparams.n_inner_iter):
-            train_out = fmodel(features, print_out, is_inner=True)
-            train_loss = train_out["loss"]
-            if not train_loss.requires_grad:
-                train_loss.requires_grad = True
+            for batch in features:
+                train_out = fmodel(batch)
+                train_loss = train_out["loss"]
+                train_loss /= self.hparams.inner_accumulate_steps
+                if not train_loss.requires_grad:
+                    train_loss.requires_grad = True
 
-            if self.hparams.inner_mode == "all":
-                named_params = self.model.named_parameters()
-            else:
-                named_params = self.trainable_params.items()
+                # reg = reg_loss(
+                #     fmodel.parameters(),
+                #     self.outer.parameters())
 
-            if self.hparams.dyna_lr:
-                self.inner_schedular.step(diffopt, named_params, iter)
-            diffopt.step(train_loss)
+                if self.hparams.dyna_lr:
+                    named_params = self.model.named_parameters()
+                    self.inner_schedular.step(diffopt, named_params, iter)
+                diffopt.step(train_loss)
 
     def inner_loop_end(self, features, print_out, fmodel) -> Dict:
         """Runs a single inner loop step
@@ -245,13 +293,11 @@ class MetaLearnerModule(MetaModule):
         :returns: dictionary that includes loss
         """
         with torch.no_grad():
-            try:
-                train_pred = fmodel(features, print_out, is_inner=True)
-            except:
-                print("inner loop error")
-                print(print_out)
-                return {"loss": torch.tensor(0.0, device=self.device)}
-            return train_pred
+            loss_total = torch.tensor(0.0, device=self.device)
+            for batch in features:
+                train_pred = fmodel(batch)
+                loss_total += train_pred["loss"]
+            return {"loss": loss_total / len(features)}
 
     def step(self, batch, is_train: bool) -> Dict:
         """Runs a single meta-training step
@@ -263,66 +309,76 @@ class MetaLearnerModule(MetaModule):
         """
         inner_opt = self.config_inner_optimizer()
         loss = torch.tensor(0.0, device=self.device)
-        outer_loss = torch.tensor(0.0, device="cpu")
-        inner_loss = torch.tensor(0.0, device="cpu")
+        outer_loss = torch.tensor(0.0, device=self.device)
+        inner_loss = torch.tensor(0.0, device=self.device)
         inner_loss_diff = torch.tensor(0.0, device="cpu")
-        print_outs = []
 
-        for _, task in enumerate(batch):
-            train_features, dev_features, print_out = get_features(
-                self.hparams.device, task, is_train, self.hparams.inner_grad_accumulate
-            )
+        # for _, task in enumerate(batch):
+        train_features, dev_features, print_out = get_features(
+            batch, self.hparams.inner_accumulate_steps
+        )
 
-            higher_grads = is_train and not self.hparams.fomaml
-            with higher.innerloop_ctx(
-                self.model,
-                inner_opt,
-                copy_initial_weights=False,
-                track_higher_grads=higher_grads,
-            ) as (fmodel, diffopt):
-                inner_track, inner_out_prev = {}, {}
+        higher_grads = is_train
+        with higher.innerloop_ctx(
+            self.model,
+            inner_opt,
+            copy_initial_weights=False,
+            track_higher_grads=higher_grads,
+            accumulation_steps=self.hparams.inner_accumulate_steps
+        ) as (fmodel, diffopt):
+            inner_track, inner_out_prev = {}, {}
 
-                for _, param in fmodel.named_parameters():
-                    if not param.requires_grad:
-                        param.requires_grad = True
+            for _, param in fmodel.named_parameters():
+                if not param.requires_grad:
+                    param.requires_grad = True
 
-                if self.hparams.inner_verbose:
-                    inner_out_prev = self.inner_loop_end(
-                        train_features, print_out, fmodel
-                    )
+            if self.hparams.inner_verbose:
+                inner_out_prev = self.inner_loop_end(
+                    train_features, print_out, fmodel
+                )
 
-                self.inner_loop_step(train_features, print_out, fmodel, diffopt)
-                inner_out_post = self.inner_loop_end(train_features, print_out, fmodel)
-                inner_loss += inner_out_post["loss"].detach().cpu()
+            self.inner_loop_step(train_features, fmodel, diffopt)
+            inner_out_post = self.inner_loop_end(train_features, print_out, fmodel)
+            inner_loss += inner_out_post["loss"].detach()
 
-                if self.hparams.inner_verbose:
-                    diff = self._inner_loss_difference(
-                        inner_out_prev, inner_out_post, inner_track
-                    )
-                    inner_loss_diff += diff
-                    self._inner_token_loss(inner_out_prev, inner_out_post, inner_track)
+            if self.hparams.inner_verbose:
+                diff = self._inner_loss_difference(
+                    inner_out_prev, inner_out_post, inner_track
+                )
+                inner_loss_diff += diff
+                self._inner_token_loss(inner_out_prev, inner_out_post, inner_track)
 
-                if is_train:
-                    dev_out = fmodel(dev_features, print_out)
-                    loss += dev_out["loss"]
-                    outer_loss += dev_out["loss"].detach().cpu()
-                else:
-                    with torch.no_grad():
-                        dev_out = fmodel(dev_features, print_out)
-                        outer_loss += dev_out["loss"].detach().cpu()
-                        dev_out["print_out"].update(inner_track)
-                        print_outs.append(dev_out["print_out"])
+            if is_train:
+                dev_out = fmodel(dev_features)
+                loss += dev_out["loss"]
+                outer_loss += dev_out["loss"].detach()
+                records = []
+            else:
+                with torch.no_grad():
+                    dev_out = fmodel(dev_features)
+                    outer_loss += dev_out["loss"].detach()
+
+                    records = []
+                    for prompt, response in zip(
+                        print_out["prompt"],
+                        print_out["response"]):
+                        records.append({
+                            "guid": print_out["guid"],
+                            "prompt": prompt,
+                            "answer": response
+                        })
+                    self.validation_inference(records, fmodel)
         output_dict = {
             "loss": loss,
-            "inner_loss": inner_loss.detach() / len(batch),
-            "outer_loss": outer_loss.detach() / len(batch),
+            "inner_loss": inner_loss, #/ len(batch),
+            "outer_loss": outer_loss #/ len(batch),
         }
 
         if self.hparams.inner_verbose:
             output_dict["inner_loss_diff"] = inner_loss_diff / len(batch)
 
         if not is_train:
-            output_dict["print_out"] = print_outs
+            output_dict["records"] = records
 
         return output_dict
 
@@ -361,9 +417,26 @@ class MetaLearnerModule(MetaModule):
                 on_step=True,
                 on_epoch=False,
                 prog_bar=True,
+                sync_dist=True
             )
         self.global_trainin_step += 1
         return output_dict
+
+    def validation_inference(self, records, fmodel):
+        meta_model = CausalLM.from_config(self.hparams)
+        meta_model.load_state_dict(fmodel.state_dict())
+        generator = LLM_Generator(
+            model_repo_id="gpt2",
+            model=meta_model.lm_model,
+            tokenizer=fmodel.tokenizer,
+            device=self.device)
+        generator.generate(
+            records,
+            pad_token_id=fmodel.tokenizer.eos_token_id,
+            temperature=0.0,
+            do_sample=False,
+            max_new_tokens=256
+        )
 
     def validation_step(self, batch, batch_idx) -> Dict:
         """Runs a single validation step
@@ -383,25 +456,25 @@ class MetaLearnerModule(MetaModule):
                 on_step=True,
                 on_epoch=False,
                 prog_bar=False,
+                sync_dist=True
             )
+
         self.validation_step_outputs.append(output_dict)
         return output_dict
 
     def validation_epoch_logic(self, outputs):
-        val_loss = torch.stack([x["loss"] for x in outputs]).mean()
+        val_loss = torch.stack([x["outer_loss"].cpu() for x in outputs]).mean()
         print_out_flatten = []
         for out in outputs:
-            print_out_flatten += out["print_out"]
-        outputs = [{"print_out": item} for item in print_out_flatten]
-        return val_loss, outputs
+            print_out_flatten += out["records"]
+        return val_loss, print_out_flatten
 
     def test_epoch_logic(self, outputs):
-        test_loss = torch.stack([x["loss"] for x in outputs]).mean()
+        test_loss = torch.stack([x["outer_loss"].cpu() for x in outputs]).mean()
         print_out_flatten = []
         for out in outputs:
             print_out_flatten += out["print_out"]
-        outputs = [{"print_out": item} for item in print_out_flatten]
-        return test_loss, outputs
+        return test_loss, print_out_flatten
 
 
 class MetaLMModule(MetaLearnerModule):
@@ -419,14 +492,8 @@ class MetaLMModule(MetaLearnerModule):
         for _, param in self.model.named_parameters():
             if param.requires_grad:
                 model_params.append({"params": param, "lr": self.hparams.inner_lr})
-
-        if self.hparams.inner_opt == "adam":
-            inner_opt = torch.optim.AdamW(model_params, amsgrad=False)
-        else:
-            inner_opt = torch.optim.SGD(
-                model_params,
-                momentum=0.9,
-            )
+        inner_opt = torch.optim.AdamW(
+            model_params, betas=(0.9, 0.95))
         return inner_opt
 
     def configure_optimizers(self):
@@ -456,6 +523,7 @@ class MetaLMModule(MetaLearnerModule):
             optimizer_grouped_parameters,
             lr=self.hparams.learning_rate,
             eps=self.hparams.adam_epsilon,
+            betas=(0.9, 0.95)
         )
         self.opt = optimizer
         scheduler = self.get_lr_scheduler()
@@ -476,7 +544,7 @@ class CausalLMModule(MetaModule):
         if config.model_type == "t5":
             self.model = MetaReasonSeq2Seq.from_config(config)
         else:
-            self.model = MetaReasonLM.from_config(config)
+            self.model = CausalLM.from_config(config)
         self.tokenizer = self.model.tokenizer
 
         self.load_dataset()
@@ -492,37 +560,25 @@ class CausalLMModule(MetaModule):
         :rtype: dict
         :returns: dictionary that includes loss
         """
-
-        print_out = batch["print_out"]
-
         features = {
             "input_ids": batch["input_ids"].to(torch.device(self.hparams.device)),
             "attention_mask": batch["attention_mask"].to(
-                torch.device(self.hparams.device)
-            ),
-            "evaluate": not is_train,
+                torch.device(self.hparams.device)),
+            "labels": batch["labels"].to(torch.device(self.hparams.device)),
         }
 
-        if "token_type_ids" in batch:
-            features["token_type_ids"] = batch["token_type_ids"].to(
-                torch.device(self.hparams.device)
-            )
-
-        if "labels" in batch:
-            features["labels"] = batch["labels"].to(torch.device(self.hparams.device))
-
         if is_train:
-            out = self.model(features, print_out)
-            loss = out["loss"]
-            output_dict = {"loss": loss, "train_loss": loss.cpu()}
+            out = self.model(features)
+            output_dict = {
+                "loss": out["loss"],
+                "train_loss": out["loss"].cpu()
+            }
         else:
             with torch.no_grad():
-                out = self.model(features, print_out)
-                loss = out["loss"]
+                out = self.model(features)
                 output_dict = {
-                    "loss": loss,
-                    "train_loss": loss.cpu(),
-                    "print_out": out["print_out"],
+                    "loss": out["loss"].cpu(),
+                    "print_out": batch["print_out"],
                 }
 
         return output_dict
@@ -537,7 +593,7 @@ class CausalLMModule(MetaModule):
         """
         output_dict = self.step(batch, is_train=True)
         self.log(
-            f"batch_train_loss",
+            "batch_train_loss",
             output_dict["train_loss"],
             on_step=True,
             on_epoch=False,
@@ -545,6 +601,20 @@ class CausalLMModule(MetaModule):
         )
         self.global_trainin_step += 1
         return output_dict
+
+    def validation_inference(self, records, model):
+        generator = LLM_Generator(
+            model_repo_id="gpt2",
+            model=model.lm_model,
+            tokenizer=model.tokenizer,
+            device=self.device)
+        generator.generate(
+            records,
+            pad_token_id=model.tokenizer.eos_token_id,
+            temperature=0.0,
+            do_sample=False,
+            max_new_tokens=256
+        )
 
     def validation_step(self, batch, batch_idx) -> Dict:
         """Runs a single validation step
@@ -555,9 +625,6 @@ class CausalLMModule(MetaModule):
         :returns: dictionary that includes loss
         """
         output_dict = self.step(batch, is_train=False)
-        assert len(output_dict["print_out"]["gen_out"]) == len(
-            output_dict["print_out"]["answer"]
-        )
         self.log(
             f"val_batch_loss",
             output_dict["loss"],
@@ -565,16 +632,35 @@ class CausalLMModule(MetaModule):
             on_epoch=False,
             prog_bar=False,
         )
+
+        records = []
+        print_out = output_dict["print_out"]
+        for prompt, response in zip(
+            print_out["prompt"],
+            print_out["response"]):
+            records.append({
+                "guid": print_out["guid"],
+                "prompt": prompt,
+                "answer": response
+            })
+        self.validation_inference(records, self.model)
+        output_dict["records"] = records
         self.validation_step_outputs.append(output_dict)
         return output_dict
 
     def validation_epoch_logic(self, outputs):
         val_loss = torch.stack([x["loss"] for x in outputs]).mean()
-        return val_loss, outputs
+        print_out_flatten = []
+        for out in outputs:
+            print_out_flatten += out["records"]
+        return val_loss, print_out_flatten
 
     def test_epoch_logic(self, outputs):
         test_loss = torch.stack([x["loss"] for x in outputs]).mean()
-        return test_loss, outputs
+        print_out_flatten = []
+        for out in outputs:
+            print_out_flatten += out["records"]
+        return test_loss, print_out_flatten
 
     def configure_optimizers(self):
         """Setup the main optimizer
@@ -632,45 +718,51 @@ def batch_aggregate(rb):
     return train_feature
 
 
-def get_features(device, batch, is_train: bool, accumulate: bool):
+def get_features(batch, accumulate_steps: int = 1):
     """Get features from batch
 
-    :param device: device to run on
     :param batch: the target batch
-    :param is_train: whether to run training or validation
     :param accumulate: whether to accumulate gradient
     :rtype: dict
     """
     print_out = batch["print_out"]
     train_features = {
-        "input_ids": batch["train_input_ids"].to(torch.device(device)),
-        "attention_mask": batch["train_attention_mask"].to(torch.device(device)),
-        "evaluate": False,
+        "input_ids": batch["train_input_ids"],
+        "attention_mask": batch["train_attention_mask"],
+        "labels": batch["train_labels"]
     }
-    if "train_token_type_ids" in batch:
-        train_features["token_type_ids"] = batch["train_token_type_ids"].to(
-            torch.device(device)
-        )
-
-    if "train_labels" in batch:
-        train_features["labels"] = batch["train_labels"].to(torch.device(device))
 
     dev_features = {
-        "input_ids": batch["input_ids"].to(torch.device(device)),
-        "attention_mask": batch["attention_mask"].to(torch.device(device)),
-        "evaluate": not is_train,
+        "input_ids": batch["input_ids"],
+        "attention_mask": batch["attention_mask"],
+        "labels": batch["labels"]
     }
 
-    if "token_type_ids" in batch:
-        dev_features["token_type_ids"] = batch["token_type_ids"].to(
-            torch.device(device)
-        )
-    if "labels" in batch:
-        dev_features["labels"] = batch["labels"].to(torch.device(device))
+    global_batch_size = batch["train_input_ids"].shape[0]
 
-    if accumulate:
-        data_keys = ["train_input_ids", "train_attention_mask", "train_token_type_ids"]
-        rebatch = [batch_split(batch[key]) for key in data_keys]
-        train_features = [batch_aggregate(rb) for rb in zip(*rebatch)]
+    # print("global_batch_size: ", global_batch_size)
+    # print("accumulate_steps: ", accumulate_steps)
+    micro_batch_size = global_batch_size // accumulate_steps
+    # print("micro_batch_size: ", micro_batch_size)
+
+
+    micro_input_ids = batch["train_input_ids"].split(micro_batch_size)
+    micro_attention_mask = batch["train_attention_mask"].split(micro_batch_size)
+    micro_labels = batch["train_labels"].split(micro_batch_size)
+    micro_batches = []
+
+    for input_ids, attention_mask, labels in zip(
+        micro_input_ids,
+        micro_attention_mask,
+        micro_labels):
+        micro_batches.append({
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "labels": labels
+        })
+    train_features = micro_batches
+
+    # rebatch = [batch_split(batch[key]) for key in data_keys]
+    # train_features = [batch_aggregate(rb) for rb in zip(*rebatch)]
 
     return train_features, dev_features, print_out

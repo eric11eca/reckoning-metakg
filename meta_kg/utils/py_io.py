@@ -1,8 +1,8 @@
+import os
 import json
 
 def read_json(path, mode="r", **kwargs):
     return json.loads(read_file(path, mode=mode, **kwargs))
-
 
 def write_json(data, path):
     return write_file(json.dumps(data, indent=2), path)
@@ -19,7 +19,6 @@ def write_file(data, path, mode="w", **kwargs):
     with open(path, mode=mode, **kwargs) as f:
         f.write(data)
 
-
 def read_jsonl(path, mode="r", **kwargs):
     ls = []
     with open(path, mode, **kwargs) as f:
@@ -27,8 +26,18 @@ def read_jsonl(path, mode="r", **kwargs):
             ls.append(json.loads(line))
     return ls
 
-
 def write_jsonl(data, path, mode="w"):
     assert isinstance(data, list)
     lines = [to_jsonl(elem) for elem in data]
     write_file("\n".join(lines) + "\n", path, mode=mode)
+
+def write_generations(generations, output_dir, log_name):
+    os.makedirs(output_dir, exist_ok=True)
+    save_path = os.path.join(output_dir, log_name)
+    # print(save_path)
+    write_jsonl(generations, save_path)
+
+def write_metrics(metrics, output_dir, log_name):
+    os.makedirs(output_dir, exist_ok=True)
+    save_path = os.path.join(output_dir, log_name)
+    write_json(metrics, save_path)

@@ -95,7 +95,7 @@ def setup_wandb(config):
     :param config: the global configuration
     :rtype: None
     """
-    download_wandb_data(config)
+    # download_wandb_data(config)
 
     if config.wandb_model:
         download_wandb_models(config)

@@ -1,12 +1,24 @@
+import re
+import os
 import torch
 import random
+import argparse
 
 from pprint import pprint
-from torch.utils.data import DataLoader
-from torch.utils.data import RandomSampler, SequentialSampler
+from torch.utils.data import (
+    Dataset,
+    DataLoader,
+    RandomSampler,
+    SequentialSampler
+)
+
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as ddp
+from torch.utils.data.distributed import DistributedSampler
 
 from .utils.py_io import read_jsonl
 
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 def kg_span_reconstruction(text):
     masked = text
@@ -15,7 +27,7 @@ def kg_span_reconstruction(text):
     return masked
 
 class DataReader:
-    """Custom dataset loader for QA problems."""
+    """Custom dataset loader for prompt-response pairs."""
 
     @staticmethod
     def _read(instance, args):
@@ -37,24 +49,126 @@ class DataReader:
         :param config: the configuration
         """
         total_data = read_jsonl(path)
-        all_facts = [fact for data in total_data for fact in data["facts"]]
-        all_facts = [fact for data in total_data for fact in data["facts"]]
+        if "context" in total_data[0]:
+            all_facts = [fact for data in total_data for fact in data["context"]]
+        elif "facts" in total_data[0]:
+            all_facts = [fact for data in total_data for fact in data["facts"]]
+        else:
+            raise ValueError("No context or facts found in the data")
 
-        total_qa_data = []
+        dataset = []
         for instance in total_data:
-            qa_data = cls._read(instance, config)
+            data = cls._read(instance, config)
             if config.random_facts:
-                num_facts = len(qa_data[0]["facts"])
-                qa_data[0]["facts"] = random.choices(all_facts, k=num_facts)
-                num_facts = len(qa_data[0]["facts"])
-                qa_data[0]["facts"] = random.choices(all_facts, k=num_facts)
-            total_qa_data += qa_data
+                num_facts = len(data[0]["context"])
+                data["context"] = random.choices(all_facts, k=num_facts)
+                num_facts = len(data[0]["context"])
+                data["context"] = random.choices(all_facts, k=num_facts)
+            dataset.append(data)
+        # pprint(dataset[0])
+        # raise ValueError("Stop here")
+        return dataset
 
-        pprint(total_qa_data[0])
-        pprint(total_qa_data[0])
+class StudentRecordDataReader(DataReader):
+    """Custom dataset loader for QA problems with associated knowledge facts."""
 
-        return total_qa_data
+    @staticmethod
+    def _read(instance, args):
+        """Reads a single json line from the target file. Modify here when the json schema changes
 
+        :param instance: the instance to be read
+        :param args: the configuration arguments
+        :rtype instance: situation_modeling.readers.input_example.InputBase
+        """
+        guid = instance["guid"]
+        context = instance["facts"]
+        recall = instance["recall"]
+        relation = instance["relation"]
+        aggregation = instance["aggregation"]
+        # problems = recall + relation + aggregation
+        problems = [aggregation] * 2
+        random.shuffle(context)
+
+        qa_pairs = []
+        if args.baseline:
+            qa_pairs = [[p['question'], p['answer'], p.get('support', "")] for p in problems]
+        if not args.baseline:
+            prefix = f"record_0 to record_{len(context) - 1} are student records you memorized."
+            for p in problems:
+                q, a = p['question'], p['answer']
+                qa_pairs.append([f"{prefix}\n{q}", a, p.get("support", "")])
+            context = [f"record_{i}: {fact}" for i, fact in enumerate(context)]
+
+        # if args.multi_task:
+        #     criticals = "**\n".join(instance["facts"])
+        #     for item in qa_pairs:
+        #         item[1] = f"Based on\n{criticals}\nThe answer is: {item[1]}"
+
+        return {"guid": guid, "qa_pairs": qa_pairs, "context": context}
+
+class BabiLongDataReader(DataReader):
+    """Custom dataset loader for QA problems with associated knowledge facts."""
+
+    @staticmethod
+    def _read(instance, args):
+        """Reads a single json line from the target file. Modify here when the json schema changes
+
+        :param instance: the instance to be read
+        :param args: the configuration arguments
+        :rtype instance: situation_modeling.readers.input_example.InputBase
+        """
+        guid = instance["guid"]
+        context = instance["facts"]
+        problems = [{
+            "question": instance["question"],
+            "answer": instance["answer"],
+            "support": instance.get("support", "")
+        }]
+        random.shuffle(context)
+
+        qa_pairs = []
+        if args.baseline:
+            qa_pairs = [[p['question'], p['answer'], p['support']] for p in problems]
+        if not args.baseline:
+            prefix = f"record_0 to record_{len(context) - 1} are student records you memorized."
+            for p in problems:
+                q, a = p['question'], p['answer']
+                qa_pairs.append([f"{prefix}\n{q}", a, p.get("support", "")])
+            context = [f"record_{i}: {fact}" for i, fact in enumerate(context)]
+
+        return {"guid": guid, "qa_pairs": qa_pairs, "context": context}
+
+class LossInMidDataReader(DataReader):
+    """Custom dataset loader for QA problems with associated knowledge facts."""
+
+    @staticmethod
+    def _read(instance, args):
+        """Reads a single json line from the target file. Modify here when the json schema changes
+
+        :param instance: the instance to be read
+        :param args: the configuration arguments
+        :rtype instance: situation_modeling.readers.input_example.InputBase
+        """
+        guid = instance["guid"]
+        context = instance["facts"]
+        problems = [{
+            'question': instance["question"],
+            'answer': instance["answers"],
+            'support': " ".join(instance.get("support", []))
+        }]
+        random.shuffle(context)
+
+        qa_pairs = []
+        if args.baseline:
+            qa_pairs = [[p['question'], p['answer'], p['support']] for p in problems]
+        if not args.baseline:
+            prefix = f"record_0 to record_{len(context) - 1} are documents you memorized."
+            for p in problems:
+                q, a = p['question'], p['answer']
+                qa_pairs.append([f"{prefix}\n{q}", a, p.get("support", "")])
+            context = [f"record_{i}: {fact}" for i, fact in enumerate(context)]
+
+        return {"guid": guid, "qa_pairs": qa_pairs, "context": context}
 
 class ProofWriterDataReader(DataReader):
     """Custom dataset loader for QA problems with associated knowledge facts."""
@@ -70,615 +184,407 @@ class ProofWriterDataReader(DataReader):
         answer_map = {"true": "yes", "false": "no", "unknown": "none"}
 
         guid = instance["guid"]
-        question = instance["question"].replace(".", "")
-        answer = answer_map[instance["answer"]]
+        questions = instance["questions"]
+        context = instance["facts"]
+        answers = [answer_map[a] for a in instance["answers"]]
+        qa_pairs = []
 
-        if "all_facts" in instance:
-            context = [k.replace(".", "") for k in instance["all_facts"]]
-            criticals = [k.replace(".", "") for k in instance["facts"]]
-            distractors = list(set(context) - set(criticals))
+        if "distractors" in instance:
+            criticals = instance["facts"]
+            distractors = instance["distractors"]
             if args.load_order == "pre":
                 context = criticals + distractors
             elif args.load_order == "post":
                 context = distractors + criticals
             elif args.load_order == "in":
+                context = distractors + criticals
                 random.shuffle(context)
-        else:
-            context = [k.replace(".", "") for k in instance["facts"]]
 
         if args.baseline:
-            qa_pairs = [[question, answer]]
-        else:
-            fact_enum = [f"fact_{i}" for i in range(len(context))]
-            prefix = f"Based on {' '.join(fact_enum)}"
-            qa_pairs = [[f"{prefix}, can we conclude {question}?", answer]]
-
-        if args.multi_task:
-            for item in qa_pairs:
-                item[1] = f"{item[1]} because {','.join(context)}"
-
+            qa_pairs = [[q, a] for q, a in zip(questions, answers)]
         if not args.baseline:
+            prefix = f"Given the the set of facts: from fact_0 to fact_{len(context) - 1}"
+            for q, a in zip(questions, answers):
+                qa_pairs.append([f"{prefix}, can we conclude {q}?", a])
             context = [f"fact_{i}: {fact}" for i, fact in enumerate(context)]
 
-        return [{"guid": guid, "qa_pairs": [item], "facts": context} for item in qa_pairs]
-
-
-class ClutrrDataReader(DataReader):
-    """Custom dataset loader for QA problems with associated knowledge facts."""
-
-    @staticmethod
-    def _read(instance, args):
-        """Reads a single json line from the target file. Modify here when the json schema changes
-
-        :param instance: the instance to be read
-        :param args: the configuration arguments
-        :rtype instance: situation_modeling.readers.input_example.InputBase
-        """
-        guid = instance["guid"]
-        question = instance["questions"]
-        facts = instance["facts"]
-        answer = instance["answer"]
-
-        if args.baseline:
-            qa_pairs = [[question, answer]]
-        else:
-            fact_enum = [f"fact_{i}" for i in range(len(facts))]
-            prefix = f"Based on {' '.join(fact_enum)}"
-            qa_pairs = [[f"{prefix}, {question}", answer]]
-
         if args.multi_task:
+            criticals = "**\n".join(instance["facts"])
             for item in qa_pairs:
-                item[1] = f"{item[1]} because {','.join(facts)}"
-        if not args.baseline:
-            facts = [f"fact_{i}: {fact}" for i, fact in enumerate(facts)]
+                item[1] = f"Based on\n{criticals}\nThe answer is: {item[1]}"
 
-        return [{"guid": guid, "qa_pairs": [item], "facts": facts} for item in qa_pairs]
+        return {"guid": guid, "qa_pairs": [item], "context": context}
 
+class MetaKnowledgeDataset(Dataset):
+    def __init__(self, args, tokenizer, data_path, data_type, is_training):
+        self.args = args
+        self.task = args.dataset
 
-class FolioDataReader(DataReader):
-    """Custom dataset loader for QA problems with associated knowledge facts."""
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
 
-    @staticmethod
-    def _read(instance, args):
-        """Reads a single json line from the target file. Modify here when the json schema changes
-
-        :param instance: the instance to be read
-        :param args: the configuration arguments
-        :rtype instance: situation_modeling.readers.input_example.InputBase
-        """
-        answer_map = {
-            "true": "yes",
-            "false": "no",
-            "unknown": "unknown",
-            "uncertain": "unknown",
-        }
-        guid = instance["guid"]
-        question = instance["question"]
-        context = instance["facts"]
-        answer = answer_map[instance["answer"]]
-
-        if args.baseline:
-            qa_pairs = [[question, answer]]
-        else:
-            fact_enum = [f"fact_{i}" for i in range(len(context))]
-            prefix = f"Based on {' '.join(fact_enum)}"
-            qa_pairs = [[f"{prefix}, can we conclude {question}?", answer]]
-
-        if args.multi_task:
-            for item in qa_pairs:
-                item[1] = f"{item[1]} because {','.join(context)}"
-
-        if not args.baseline:
-            context = [f"fact_{i}: {fact}" for i, fact in enumerate(context)]
-
-        return [{"guid": guid, "qa_pairs": [item], "facts": context} for item in qa_pairs]
-
-
-class EntailmentTreeDataReader:
-    """Custom dataset loader for QA problems with associated knowledge facts."""
-
-    @staticmethod
-    def _read(instance, args):
-        """Reads a single json line from the target file. Modify here when the json schema changes
-
-        :param instance: the instance to be read
-        :param args: the configuration arguments
-        :rtype instance: situation_modeling.readers.input_example.InputBase
-        """
-        guid = instance["guid"]
-        question = instance["hypothesis"]
-        context = instance["facts"]
-        answer = instance["answer"]
-
-        fact_enum = [f"fact_{i}" for i in range(len(context))]
-        prefix = f"Based on {' '.join(fact_enum)}"
-        if args.baseline:
-            qa_pairs = [[question, answer]]
-        else:
-            qa_pairs = [[f"{prefix}, can we conclude {question}?", answer]]
-
-        if args.multi_task:
-            for item in qa_pairs:
-                item[1] = f"{item[1]} because {','.join(context)}"
-
-        if not args.baseline:
-            facts = [f"fact_{i}: {fact}" for i, fact in enumerate(context)]
-        else:
-            facts = context
-
-        return [{"guid": guid, "qa_pairs": [item], "facts": facts} for item in qa_pairs]
-
-    @classmethod
-    def jsonl_file_reader(cls, path, config):
-        """The method responsible for parsing in the input file. Implemented here
-        to make the overall pipeline more transparent.
-
-        :param path: the path to the target data file
-        :param evaluation: indicator as to where this is an evaluation file (based on name)
-        :param config: the configuration
-        """
-        total_data = read_jsonl(path)
-
-        total_qa_data = []
-        for instance in total_data:
-            qa_data = cls._read(instance, config)
-
-            total_qa_data += qa_data
-
-        for data in total_qa_data[:2]:
-            pprint(data)
-
-        return total_qa_data
-
-
-class MetaKnowledgeDataset(object):
-    def __init__(self, logger, args, tokenizer, data_path, data_type, is_training):
         self.data_path = data_path
         self.data_type = data_type
-        self.task_name = args.dataset
-        self.args = args
 
         reader_classes = {
             "proofwriter": ProofWriterDataReader,
-            "clutrr": ClutrrDataReader,
-            "folio": FolioDataReader,
-            "entailment_tree": EntailmentTreeDataReader,
+            "student_records": StudentRecordDataReader,
+            "loss_in_mid": LossInMidDataReader,
+            "babilong": BabiLongDataReader,
         }
+
         self.reader = reader_classes[args.dataset_type]
         self.is_training = is_training
-        self.logger = logger
         self.tokenizer = tokenizer
-        self.dataloader = None
-        self.load = False
 
         self.data = self.read_data_from_file()
-        if not self.is_training and args.max_data > 0:
-            self.data = random.choices(self.data, k=args.max_data)
+        if not self.is_training and args.max_eval_data > 0:
+            self.data = random.choices(self.data, k=args.max_eval_data)
 
         if self.is_training and args.do_eval:
             self.data = self.data[:1]
 
+        # if self.data_type == "test":
+        #     self.data = self.data[:20]
+
     def __len__(self):
         return len(self.data)
 
+    def __getitem__(self, index):
+        qa_data = self.data[index]
+        if self.args.baseline:
+            return self.causal_lm_base_collator(qa_data)
+        else:
+            return self.causal_lm_collator(qa_data)
+
     def read_data_from_file(self):
-        file_path = f"{self.data_path}/{self.task_name}/{self.data_type}.jsonl"
+        file_path = f"{self.data_path}/{self.task}/{self.data_type}.jsonl"
         file_data = self.reader.jsonl_file_reader(file_path, self.args)
         return file_data
 
-    def flatten(self, answers):
-        new_answers, metadata = [], []
-        for answer in answers:
-            metadata.append((len(new_answers), len(new_answers) + len(answer)))
-            new_answers += answer
-        return new_answers, metadata
+    def compute_seq_length(self, prompt, response):
+        input_text = f"{prompt} {response}{self.tokenizer.eos_token}"
+        tokenized_input = self.tokenizer.encode(input_text, add_special_tokens=True)
+        return len(tokenized_input)
 
-    def load_dataloader(self):
-        meta_dataloader = MetaDataLoader(
-            self.args, self.data, self.tokenizer, self.is_training
+    def encode_with_prompt_completion_format(self, prompt, response, max_seq_length):
+        '''
+        Here we assume each example has 'prompt' and 'completion' fields.
+        We concatenate prompt and completion and tokenize them together because otherwise prompt will be padded/trancated
+        and it doesn't make sense to follow directly with the completion.
+        '''
+        example_text = f"{prompt} {response}{self.tokenizer.eos_token}"
+        tokenized_example = self.tokenizer(
+            example_text,
+            return_tensors='pt',
+            max_length=max_seq_length,
+            truncation=True,
+            padding='max_length'
         )
-        self.dataloader = meta_dataloader.dataloader
-        return self.dataloader
-
-class MetaDataLoader:
-    def __init__(self, args, dataset, tokenizer, is_training):
-        self.args = args
-        self.task = args.dataset_type
-
-        self.dataset = dataset
-        self.tokenizer = tokenizer
-        self.evaluate = not is_training
-
-        if is_training:
-            sampler = RandomSampler(dataset)
-            batch_size = args.train_batch_size
-        else:
-            sampler = SequentialSampler(dataset)
-            batch_size = args.predict_batch_size
-
-        if args.model_type == "t5":
-            if args.baseline:
-                collate_fn = self.text2text_baseline_collator
-            else:
-                collate_fn = self.text2text_collator
-        else:
-            if args.baseline:
-                collate_fn = self.causal_lm_base_collator
-            else:
-                collate_fn = self.causal_lm_collator
-        self.dataloader = DataLoader(
-            dataset,
-            sampler=sampler,
-            batch_size=batch_size,
-            collate_fn=collate_fn,
-            num_workers=args.num_workers,
+        input_ids = tokenized_example.input_ids
+        labels = input_ids.clone()
+        tokenized_prompt = self.tokenizer(
+            prompt, return_tensors='pt',
+            max_length=max_seq_length,
+            truncation=True
         )
-
-    def _tensorize(self, input_txt, output_txt, max_length=None):
-        """Converts a list of strings into a tensor of ids
-
-        :param input_txt: the input text
-        :param output_txt: the output text
-        :param max_length: the maximum length of the sequence
-        :return: the tensorized input and output
-        """
-        pad = self.tokenizer.eos_token
-        pad_id = self.tokenizer.encode(pad)
-
-        ids1 = self.tokenizer(input_txt, return_tensors="pt")["input_ids"]
-        ids2 = self.tokenizer(output_txt, return_tensors="pt")["input_ids"]
-
-        max_length = ids1.size(1) + ids2.size(1) if max_length is None else max_length
-        max_length = ids1.size(1) + ids2.size(1) if max_length is None else max_length
-        n_mask = max_length - ids1.size(1) - ids2.size(1)
-        assert n_mask >= 0, (max_length, ids1.size(1), ids2.size(1))
-        padding = torch.LongTensor(pad_id * n_mask).unsqueeze(0)
-
-        input_ids = torch.cat((ids1, ids2, padding), dim=1)
-        attention_mask = torch.LongTensor(
-            [1] * (ids1.size(1) + ids2.size(1)) + [0] * n_mask
-        ).unsqueeze(0)
-        token_type_ids = torch.LongTensor(
-            [0] * ids1.size(1) + [1] * ids2.size(1) + [0] * n_mask
-        ).unsqueeze(0)
-
-        assert (
-            input_ids.size(1)
-            == attention_mask.size(1)
-            == token_type_ids.size(1)
-            == max_length
-        )
-        assert (
-            input_ids.size(1)
-            == attention_mask.size(1)
-            == token_type_ids.size(1)
-            == max_length
-        )
-
-        return input_ids, attention_mask, token_type_ids
-
-    def causal_lm_base_collator(self, batch):
-        """Batch collator for this custom class
-        :param batch: an incoming batch
-        :param tokenizer: the model tokenizer
-        :param args: the global configuration
-        """
-        eos = self.tokenizer.eos_token
-        bos = self.tokenizer.bos_token
-
-        facts_batch = ["\n".join([fact for fact in data["facts"]]) for data in batch]
-        facts_batch = ["\n".join([fact for fact in data["facts"]]) for data in batch]
-        questions = [f"{data['qa_pairs'][0][0]}" for data in batch]
-        answers = [data["qa_pairs"][0][1] for data in batch]
-        answers = [data["qa_pairs"][0][1] for data in batch]
-
-        max_length = 0
-        inputs = []
-        for facts, question, answer in zip(facts_batch, questions, answers):
-            fact_prefix = f"{bos}{facts}"
-            input_txt = f"{fact_prefix}\n{question}"
-
-
-            if self.args.no_facts:
-                input_txt = question
-            elif self.args.no_question and not self.evaluate:
-                input_txt = fact_prefix
-            elif self.args.no_question and self.evaluate:
-                input_txt = question
-
-            if self.args.no_question and not self.evaluate:
-                output_txt = f"{fact_prefix}"
-            else:
-                output_txt = f"{answer}{eos}"
-
-            inputs.append((input_txt, output_txt))
-
-            ids1 = self.tokenizer(input_txt, return_tensors="pt")["input_ids"]
-            ids2 = self.tokenizer(output_txt, return_tensors="pt")["input_ids"]
-            max_length = max(max_length, ids1.size(1) + ids2.size(1))
-
-        input_ids_batch, attention_mask_batch, token_type_ids_batch = [], [], []
-        for txt_in, txt_out in inputs:
-            input_ids, attention_mask, token_type_ids = self._tensorize(
-                txt_in, txt_out, max_length)
-            input_ids_batch.append(input_ids)
-            attention_mask_batch.append(attention_mask)
-            token_type_ids_batch.append(token_type_ids)
-
-        print_inputs = [txt_in for (txt_in, _) in inputs]
-        if len(batch[0]["qa_pairs"][0]) > 2:
-            print_outputs = [data["qa_pairs"][0][2] for data in batch]
-        if len(batch[0]["qa_pairs"][0]) > 2:
-            print_outputs = [data["qa_pairs"][0][2] for data in batch]
-        else:
-            print_outputs = [data["qa_pairs"][0][1] for data in batch]
-            print_outputs = [data["qa_pairs"][0][1] for data in batch]
-        print_out = {
-            "guid": [data["guid"] for data in batch],
-            "guid": [data["guid"] for data in batch],
-            "prefix": [self.args.dataset for data in batch],
-            "question": print_inputs,
-            "answer": print_outputs,
+        labels[:, :tokenized_prompt.input_ids.shape[1]] = -100
+        attention_mask = torch.ones_like(input_ids)
+        return {
+            'input_ids': input_ids.flatten(),
+            'labels': labels.flatten(),
+            'attention_mask': attention_mask.flatten(),
         }
 
-        feature = {
-            "input_ids": torch.cat(input_ids_batch, dim=0),
-            "attention_mask": torch.cat(attention_mask_batch, dim=0),
-            "token_type_ids": torch.cat(token_type_ids_batch, dim=0),
-            "labels": torch.cat(input_ids_batch, dim=0),
-            "print_out": print_out,
-            "evaluate": self.evaluate,
-        }
-
-        return feature
-
-    def causal_lm_collator(self, batch):
+    def causal_lm_base_collator(self, qa_data):
         """Batch collator for this custom class
         :param batch: an incoming batch
         :param tokenizer: the model tokenizer
         :param args: the global configuration
         """
-        eos = self.tokenizer.eos_token
-        batch_features = []
-        for qa_data in batch:
-            max_length = 0
-
-            train_input_ids_batch = []
-            train_attention_mask_batch = []
-            train_token_type_ids_batch = []
-            train_samples = []
-            for fact in qa_data["facts"]:
-                fact_pair = fact.split(":")
-            for fact in qa_data["facts"]:
-                fact_pair = fact.split(":")
-                train_input_txt = f"{fact_pair[0].strip()}: "
-                train_output_txt = f"{fact_pair[1].strip()}"
-                ids1 = self.tokenizer(train_input_txt, return_tensors="pt")["input_ids"]
-                ids2 = self.tokenizer(train_output_txt, return_tensors="pt")[
-                    "input_ids"
-                ]
-                ids1 = self.tokenizer(train_input_txt, return_tensors="pt")["input_ids"]
-                ids2 = self.tokenizer(train_output_txt, return_tensors="pt")[
-                    "input_ids"
-                ]
-                max_length = max(max_length, ids1.size(1) + ids2.size(1))
-                train_samples.append((train_input_txt, train_output_txt))
-
-            for sample in train_samples:
-                train_input_txt = sample[0]
-                train_output_txt = sample[1]
-                input_ids, attention_mask, token_type_ids = self._tensorize(
-                    train_input_txt, train_output_txt, max_length
-                )
-                train_input_ids_batch.append(input_ids)
-                train_attention_mask_batch.append(attention_mask)
-                train_token_type_ids_batch.append(token_type_ids)
-
-            dev_input_ids_batch = []
-            dev_attention_mask_batch = []
-            dev_token_type_ids_batch = []
-            labels_batch = []
-            dev_samples = []
-            for qa_pair in qa_data["qa_pairs"]:
-                dev_input_txt = qa_pair[0]
-                dev_output_txt = f"{qa_pair[1]}{eos}"
-                dev_samples.append((dev_input_txt, dev_output_txt.replace(eos, "")))
-                dev_samples.append((dev_input_txt, dev_output_txt.replace(eos, "")))
-                input_ids, attention_mask, token_type_ids = self._tensorize(
-                    dev_input_txt, dev_output_txt
-                )
-                dev_input_ids_batch.append(input_ids)
-                dev_attention_mask_batch.append(attention_mask)
-                dev_token_type_ids_batch.append(token_type_ids)
-
-                labels_batch.append(input_ids)
-
-            feature = {
-                "input_ids": torch.cat(dev_input_ids_batch, dim=0),
-                "attention_mask": torch.cat(dev_attention_mask_batch, dim=0),
-                "token_type_ids": torch.cat(dev_token_type_ids_batch, dim=0),
-                "labels": torch.cat(labels_batch, dim=0),
-                "train_input_ids": torch.cat(train_input_ids_batch, dim=0),
-                "train_attention_mask": torch.cat(train_attention_mask_batch, dim=0),
-                "train_token_type_ids": torch.cat(train_token_type_ids_batch, dim=0),
-                "print_out": {"guid": [qa_data["guid"]]},
-                "evaluate": self.evaluate,
-            }
-
-            if self.evaluate:
-                train_inputs = [fact[0] for fact in train_samples]
-                train_outputs = [fact[1] for fact in train_samples]
-                dev_inputs_eval = [sample[0] for sample in dev_samples]
-                dev_outputs = [sample[1] for sample in dev_samples]
-
-                feature["print_out"].update(
-                    {
-                        "question": dev_inputs_eval,
-                        "answer": dev_outputs,
-                        "prefix": [self.args.dataset],
-                    }
-                )
-
-                feature["inner_print_out"] = {
-                    "prompt": train_inputs,
-                    "fact": train_outputs,
-                    "guid": [qa_data["guid"]],
-                }
-            batch_features.append(feature)
-        return batch_features
-    def text2text_baseline_collator(
-        self,
-        batch,
-    ):
-        """Batch collator for this custom class
-        :param batch: an incoming batch
-        :param tokenizer: the model tokenizer
-        :param args: the global configuration
-        """
-        facts_batch = ["\n".join([fact for fact in data["facts"]]) for data in batch]
-        questions = [f"{data['qa_pairs'][0][0]}" for data in batch]
-        answers = [data["qa_pairs"][0][1] for data in batch]
-
+        input_ids_batch = []
+        attention_mask_batch = []
+        labels_batch = []
         inputs, outputs = [], []
-        for facts, question, answer in zip(facts_batch, questions, answers):
-            inputs.append(f"{facts}\n{question}")
-            outputs.append(answer)
+        for qa_pair in qa_data["qa_pairs"]:
+            prompt = f"{qa_pair[0]}\nAnswer:"
+            response = f"{qa_pair[1]}" # + f"\nSupport: {qa_pair[2]}"
+            prompt_len = len(self.tokenizer.encode(prompt, add_special_tokens=True))
+            response_len = len(self.tokenizer.encode(response, add_special_tokens=True))
 
-        input_max_length = max([len(self.tokenizer.encode(i)) for i in inputs])
-        output_max_length = max([len(self.tokenizer.encode(o)) for o in outputs])
+            truncated_context = []
+            total_context_len = 0
+            for fact in qa_data["context"]:
+                fact_len = len(self.tokenizer.encode(fact, add_special_tokens=False))
+                if total_context_len + fact_len + prompt_len + response_len > 1000:
+                    break
+                truncated_context.append(fact)
+                total_context_len += fact_len
 
-        tokenized_inputs = self.tokenizer(
-            inputs,
-            max_length=input_max_length,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        )
+            # print("total_context_len: ", total_context_len + prompt_len + response_len)
 
-        tokenized_outputs = self.tokenizer(
-            outputs,
-            max_length=output_max_length,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        )
-
-        if len(batch[0]["qa_pairs"][0]) > 2:
-            print_outputs = [data["qa_pairs"][0][2] for data in batch]
-        else:
-            print_outputs = [data["qa_pairs"][0][1] for data in batch]
+            context = "\n".join(truncated_context)
+            prompt = f"{context}\n{prompt}"
+            encoded = self.encode_with_prompt_completion_format(
+                prompt, response, max_seq_length=1024)
+            input_ids_batch.append(encoded['input_ids'])
+            attention_mask_batch.append(encoded['attention_mask'])
+            labels_batch.append(encoded['labels'])
+            inputs.append(prompt)
+            outputs.append(response)
 
         print_out = {
-            "guid": [data["guid"] for data in batch],
-            "prefix": [self.args.dataset for _ in batch],
-            "question": inputs,
-            "answer": print_outputs,
+            "guid": qa_data["guid"],
+            "prompt": inputs,
+            "response": outputs,
         }
 
-        feature = {
-            "input_ids": tokenized_inputs["input_ids"],
-            "attention_mask": tokenized_inputs["attention_mask"],
-            "labels": tokenized_outputs["input_ids"],
+        return {
+            "input_ids": torch.stack(input_ids_batch, dim=0),
+            "attention_mask": torch.stack(attention_mask_batch, dim=0),
+            "labels": torch.stack(labels_batch, dim=0),
             "print_out": print_out,
-            "evaluate": self.evaluate,
+            "task": self.task,
         }
-        return feature
 
-    def text2text_collator(
-        self,
-        batch,
-    ):
+    def causal_lm_collator(self, qa_data):
         """Batch collator for this custom class
         :param batch: an incoming batch
         :param tokenizer: the model tokenizer
         :param args: the global configuration
         """
-        batch_features = []
-        for qa_data in batch:
-            train_input_txt_batch = []
-            train_output_txt_batch = []
-            for fact in qa_data["facts"]:
-                fact_pair = fact.split(":")
-                train_output_txt = fact_pair[1].strip()
-                masked = kg_span_reconstruction(train_output_txt)
-                train_input_txt = f"{fact_pair[0].strip()}: {masked}"
-                train_input_txt_batch.append(train_input_txt)
-                train_output_txt_batch.append(train_output_txt)
+        train_input_ids_batch = []
+        train_attention_mask_batch = []
+        train_labels_batch = []
+        train_inputs, train_outputs = [], []
+        max_seq_length = 0
+        sequences = []
+        for fact in qa_data["context"]:
+            if "fact_" in fact:
+                pattern = r'fact_\d+:'
+            else:
+                pattern = r'record_\d+:'
+            try:
+                prompt = re.findall(pattern, fact)[0]
+            except:
+                prompt = fact.split(":")[0] + ":"
+            splited = re.split(pattern, fact)
+            response = splited[1]
+            sequences.append((prompt, response))
+            max_seq_length = max(max_seq_length, self.compute_seq_length(prompt, response))
 
-            input_max_length = [
-                len(self.tokenizer.encode(e)) for e in train_input_txt_batch
-            ]
-            output_max_length = [
-                len(self.tokenizer.encode(e)) for e in train_output_txt_batch
-            ]
+        max_seq_length = min(max_seq_length, 128)
 
-            train_tokenized_input = self.tokenizer.batch_encode_plus(
-                train_input_txt_batch,
-                padding=True,
-                truncation=True,
-                return_tensors="pt",
-                max_length=max(input_max_length),
+        # print("inner loop max_seq_length: ", max_seq_length)
+
+        for prompt, response in sequences:
+            encoded = self.encode_with_prompt_completion_format(
+                prompt, response,
+                max_seq_length=max_seq_length)
+            train_input_ids_batch.append(encoded['input_ids'])
+            train_attention_mask_batch.append(encoded['attention_mask'])
+            train_labels_batch.append(encoded['labels'])
+            train_inputs.append(prompt)
+            train_outputs.append(response)
+
+        dev_input_ids_batch = []
+        dev_attention_mask_batch = []
+        dev_labels_batch = []
+        dev_inputs, dev_outputs = [], []
+        sequences = []
+        max_seq_length = 0
+        for qa_pair in qa_data["qa_pairs"]:
+            prompt = f"{qa_pair[0]}\nAnswer:"
+            response = f"{qa_pair[1]}\nSupport: {qa_pair[2]}"
+            sequences.append((prompt, response))
+            max_seq_length = max(max_seq_length, self.compute_seq_length(prompt, response))
+
+        # print("outer loop max_seq_length: ", max_seq_length)
+
+        for prompt, response in sequences:
+            encoded = self.encode_with_prompt_completion_format(
+                prompt, response,
+                max_seq_length=max_seq_length)
+            dev_input_ids_batch.append(encoded['input_ids'])
+            dev_attention_mask_batch.append(encoded['attention_mask'])
+            dev_labels_batch.append(encoded['labels'])
+            dev_inputs.append(prompt)
+            dev_outputs.append(str(response))
+
+        feature = {
+            "input_ids": torch.stack(dev_input_ids_batch, dim=0),
+            "attention_mask": torch.stack(dev_attention_mask_batch, dim=0),
+            "labels": torch.stack(dev_labels_batch, dim=0),
+            "train_input_ids": torch.stack(train_input_ids_batch, dim=0),
+            "train_attention_mask": torch.stack(train_attention_mask_batch, dim=0),
+            "train_labels": torch.stack(train_labels_batch, dim=0),
+            "print_out": {"guid": qa_data["guid"]},
+        }
+
+        if not self.is_training:
+            feature["print_out"].update({
+                    "prompt": dev_inputs,
+                    "response": dev_outputs
+                }
             )
-            train_tokenized_output = self.tokenizer.batch_encode_plus(
-                train_output_txt_batch,
-                padding=True,
-                truncation=True,
-                return_tensors="pt",
-                max_length=max(output_max_length),
-            )
-
-            dev_input_txt_batch = []
-            dev_output_txt_batch = []
-            labels_batch = []
-            dev_samples = []
-            for qa_pair in qa_data["qa_pairs"]:
-                dev_input_txt_batch.append(qa_pair[0])
-                dev_output_txt_batch.append(qa_pair[1])
-                labels_batch.append(qa_pair[1])
-                dev_samples.append((qa_pair[0], qa_pair[1]))
-
-            input_max_length = [
-                len(self.tokenizer.encode(e)) for e in dev_input_txt_batch
-            ]
-            output_max_length = [
-                len(self.tokenizer.encode(e)) for e in dev_output_txt_batch
-            ]
-
-            dev_tokenized_input = self.tokenizer.batch_encode_plus(
-                dev_input_txt_batch,
-                padding=True,
-                truncation=True,
-                return_tensors="pt",
-                max_length=max(input_max_length),
-            )
-            dev_tokenized_output = self.tokenizer.batch_encode_plus(
-                dev_output_txt_batch,
-                padding=True,
-                truncation=True,
-                return_tensors="pt",
-                max_length=max(output_max_length),
-            )
-
-            feature = {
-                "input_ids": dev_tokenized_input["input_ids"],
-                "attention_mask": dev_tokenized_input["attention_mask"],
-                "labels": dev_tokenized_output["input_ids"],
-                "train_input_ids": train_tokenized_input["input_ids"],
-                "train_attention_mask": train_tokenized_input["attention_mask"],
-                "train_labels": train_tokenized_output["input_ids"],
-                "print_out": {"guid": [qa_data["guid"]]},
-                "evaluate": self.evaluate,
+            feature["inner_print_out"] = {
+                "guid": qa_data["guid"],
+                "prompt": train_inputs,
+                "response": train_outputs
             }
+        return feature
 
-            if self.evaluate:
-                dev_inputs_eval = [sample[0] for sample in dev_samples]
-                dev_outputs = [sample[1] for sample in dev_samples]
-                feature["print_out"].update(
-                    {
-                        "question": dev_inputs_eval,
-                        "answer": dev_outputs,
-                        "guid": [qa_data["guid"]],
-                    }
-                )
-            batch_features.append(feature)
-        return batch_features
+def create_dataloader(args, dataset, is_training):
+    if is_training:
+        sampler = RandomSampler(dataset)
+        batch_size = args.train_batch_size
+    else:
+        sampler = SequentialSampler(dataset)
+        batch_size = args.eval_batch_size
+
+    return DataLoader(
+        dataset,
+        sampler=sampler,
+        batch_size=batch_size,
+        num_workers=args.num_workers,
+        collate_fn=unroll
+    )
+
+def unroll(batch):
+   return batch[0]
+
+# from transformers import AutoTokenizer
+
+# def prepare(dataset, rank, world_size, batch_size=8, pin_memory=False, num_workers=0):
+#     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=False, drop_last=False)
+
+#     dataloader = DataLoader(
+#         dataset, batch_size=batch_size,
+#         pin_memory=pin_memory,
+#         num_workers=num_workers,
+#         drop_last=False, shuffle=False,
+#         sampler=sampler)
+
+#     return dataloader
+
+# def setup(rank, world_size):
+#     dist.init_process_group("nccl", rank=rank, world_size=world_size)
+
+# def build_dataset(args):
+#     tokenizer = AutoTokenizer.from_pretrained("susnato/phi-2")
+#     tokenizer.pad_token = tokenizer.eos_token
+
+#     train_dataset = MetaKnowledgeDataset(
+#         args=args,
+#         tokenizer=tokenizer,
+#         data_path="./data",
+#         data_type="train",
+#         is_training=True,
+#     )
+#     sample = train_dataset[0]
+
+#     train_input_ids = sample["train_input_ids"]
+#     train_attention_mask = sample["train_attention_mask"]
+#     train_labels = sample["train_labels"]
+
+#     rebatch = [{
+#         "input_ids": train_input_ids[i],
+#         "attention_mask": train_attention_mask[i],
+#         "labels": train_labels[i],
+#     } for i in range(len(train_input_ids))]
+#     return rebatch
+
+# import time
+
+# def main(rank, world_size, args):
+#     print("rank", rank, "startup")
+#     setup(rank, world_size)
+#     dataset = build_dataset(args)
+#     dataloader = prepare(dataset, rank, world_size)
+
+#     time.sleep(5)
+
+#     for epoch in range(1):
+#         if rank == 0:
+#             print("the current epoch is: ", epoch)
+#         time.sleep(2)
+#         dataloader.sampler.set_epoch(epoch)
+#         for step, batch in enumerate(dataloader):
+#             time.sleep(1)
+#             print(f"rank: {rank}, step: {step}, batch: {batch['input_ids'][0][:10]}")
+#             time.sleep(1)
+#         if rank == 0:
+#             print("the current epoch completes")
+#         time.sleep(2)
+#     dist.destroy_process_group()
+
+if __name__ == "__main__":
+    import argparse
+    import torch.multiprocessing as mp
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", type=str, default="student_records")
+    parser.add_argument("--do_train", action="store_true")
+    parser.add_argument("--do_eval", action="store_true")
+    parser.add_argument("--train_batch_size", type=int, default=1)
+    parser.add_argument("--eval_batch_size", type=int, default=1)
+    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--max_eval_data", type=int, default=10)
+    parser.add_argument("--baseline", action="store_true")
+    parser.add_argument("--multi_task", action="store_true")
+    parser.add_argument("--random_facts", action="store_true")
+    args = parser.parse_args()
+
+    # world_size = 8
+    # mp.spawn(
+    #     main,
+    #     args=(world_size, args),
+    #     nprocs=world_size
+    # )
+
+    # labels = sample["labels"][0]
+    # labels[labels < 0] = 0
+    # input_decoded = tokenizer.decode(sample["input_ids"][0], skip_special_tokens=True)
+    # label_decoded = tokenizer.decode(labels, skip_special_tokens=True)
+    # print(f"Input:\n{input_decoded}")
+    # print(f"Label:\n{label_decoded}")
+
+    # dataLoader = create_dataloader(args, train_dataset, is_training=True)
+    # for batch in dataLoader:
+    #     print(batch["input_ids"].shape)
+    #     print(batch["labels"].shape)
+    #     print(batch["attention_mask"].shape)
+    #     print(batch["train_input_ids"].shape)
+    #     print(batch["train_labels"].shape)
+    #     print(batch["train_attention_mask"].shape)
+    #     print(batch["print_out"])
+    #     break
+
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+
+    eval_dataset = MetaKnowledgeDataset(
+        args=args,
+        tokenizer=tokenizer,
+        data_path="/main/data",
+        data_type="val",
+        is_training=False,
+    )
+    sample = eval_dataset[0]
+    labels = sample["labels"][0]
+    labels[labels < 0] = 0
+    input_decoded = tokenizer.decode(sample["input_ids"][0], skip_special_tokens=True)
+    label_decoded = tokenizer.decode(labels, skip_special_tokens=True)
+    print(f"Input:\n{input_decoded}")
+    print(f"Label:\n{label_decoded}")
+
+    dataLoader = create_dataloader(args, eval_dataset, is_training=False)
+    for batch in dataLoader:
+        print(batch["input_ids"].shape)
+        print(batch["labels"].shape)
+        print(batch["attention_mask"].shape)
+        print(batch["train_input_ids"].shape)
+        print(batch["train_labels"].shape)
+        print(batch["train_attention_mask"].shape)
+        print(batch["print_out"])
+        break

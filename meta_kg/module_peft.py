@@ -16,7 +16,7 @@ class MetaLMPrefixModule(MetaLearnerModule):
             task_type=TaskType.CAUSAL_LM,
             num_virtual_tokens=config.prefix_dim
         )
-        self.model.model = get_peft_model(self.model.model, peft_config)
+        self.model.lm_model = get_peft_model(self.model.lm_model, peft_config)
 
         self.prefix_params = {}
         self.model_params = {}
@@ -26,7 +26,7 @@ class MetaLMPrefixModule(MetaLearnerModule):
             else:
                 self.model_params[name] = param
 
-        self.lm_head = self.model.model.base_model.lm_head
+        self.lm_head = self.model.lm_model.base_model.lm_head
         for name, param in self.lm_head.named_parameters():
             param.requires_grad = True
             self.prefix_params[name] = param
@@ -100,7 +100,7 @@ class MetaLMLoraModule(MetaLearnerModule):
             lora_alpha=32,
             lora_dropout=0.1,
         )
-        self.model.model = get_peft_model(self.model.model, peft_config)
+        self.model.lm_model = get_peft_model(self.model.lm_model, peft_config)
 
         self.trainable_params = {}
         self.frozen_params = {}
@@ -193,5 +193,5 @@ class CausalLoraModule(CausalLMModule):
             lora_dropout=0.0,
         )
 
-        self.model.model = get_peft_model(self.model.model, peft_config)
-        self.model.model.print_trainable_parameters()
+        self.model.lm_model = get_peft_model(self.model.lm_model, peft_config)
+        self.model.lm_model.print_trainable_parameters()

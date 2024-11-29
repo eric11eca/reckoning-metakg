@@ -25,21 +25,21 @@ def run(args):
     setup_wandb(args)
     wandb.config = OmegaConf.to_container(args, resolve=True, throw_on_missing=True)
 
-    if args.baseline:
-        args.callback_monitor = "val_acc"
+    # if args.baseline:
+    #     args.callback_monitor = "val_acc"
 
-    if args.baseline and not args.use_lora:
-        module_class = CausalLMModule
-        util_logger.info("Running baseline model")
-    elif args.baseline and args.use_lora:
-        module_class = CausalLoraModule
-        util_logger.info("Running LoRA baseline model")
-    elif not args.baseline and args.use_lora:
-        module_class = MetaLMLoraModule
-        util_logger.info("Running LoRA MAML model")
-    else:
-        module_class = MetaLMModule
-        util_logger.info("Running MAML model")
+    # if args.baseline and not args.use_lora:
+    #     module_class = CausalLMModule
+    #     util_logger.info("Running baseline model")
+    # elif args.baseline and args.use_lora:
+    #     module_class = CausalLoraModule
+    #     util_logger.info("Running LoRA baseline model")
+    # elif not args.baseline and args.use_lora:
+    #     module_class = MetaLMLoraModule
+    #     util_logger.info("Running LoRA MAML model")
+    # else:
+    module_class = MetaLMModule
+    util_logger.info("Running MAML model")
 
     trainer = setup_trainer(args)
 
