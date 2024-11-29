@@ -3,24 +3,24 @@
 defaults:
   - override /default: default.yaml
 
-# model_type: gemma-2b
-# model_name_or_path: google/gemma-2b
-
-model_type: gpt2
-model_name_or_path: gpt2
+model_type: llama
+model_name_or_path: meta-llama/Llama-3.2-1B
 
 # experiment param:
 do_train: true
 do_eval: false
 
-multi_task: false
-baseline: false
-use_lora: false
+multi_task: true
+baseline: true
+
+use_lora: true
 freeze_partial: false
 condition: false
-peft: false
+peft: true
+bf16: true
+attn_implementation: flash_attention_2
 
-wandb_name: gpt2-meta-4k-32bit
+wandb_name: llama_3_2_1B-meta-4k
 wandb_project: meta-memory
 
 # checkpoint param:
@@ -37,18 +37,18 @@ num_train_epochs: 2
 callback_monitor: val_accuracy
 
 # inner param:
-n_inner_iter: 8
+n_inner_iter: 4
 dyna_lr: true
 inner_verbose: false
 inner_mode: all
 
-inner_lr: 5e-5                    # the learning rate used for inner loop optimization
-inner_grad_accumulate: false      # whether to accumulate gradients in the inner loop
+inner_lr: 1e-4                    # the learning rate used for inner loop optimization
+inner_grad_accumulate: true       # whether to accumulate gradients in the inner loop
 inner_accumulate_steps: 1         # the number of steps to accumulate gradients in the inner loop
 
 # data_param:
-dataset: babilong               # student_records, loss_in_mid, babilong
-dataset_type: babilong           # student_records, loss_in_mid, babilong
+dataset: student_records               # student_records, loss_in_mid, babilong
+dataset_type: student_records           # student_records, loss_in_mid, babilong
 load_order: in
 no_facts: false
 random_facts: false

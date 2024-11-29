@@ -6,7 +6,7 @@ model_name_or_path: gpt2          # the HuggingFace name or path of the language
 
 # path param:
 data_dir: data                    # the data directory for train and eval data
-output_dir: output                # the output directory for checkpoints and predictions
+output_dir: runs                # the output directory for checkpoints and predictions
 
 # inner_param:
 inner_opt: adam                   # the optimizer used for inner loop optimization: [adam, sgd] adam -> AdamW, sgd -> SGD
@@ -16,12 +16,12 @@ inner_accumulate_steps: 4         # the number of steps to accumulate gradients 
 
 # train_param:
 learning_rate: 3e-5               # the learning rate used for outer loop optimization
-warmup_proportion: 0.06           # the proportion of training steps to perform linear learning rate warmup for
-weight_decay: 0.05                # the weight decay to apply (if not zero)
+warmup_proportion: 0.03           # the proportion of training steps to perform linear learning rate warmup for
+weight_decay: 0.1                # the weight decay to apply (if not zero)
 adam_epsilon: 1e-8                # epsilon for Adam optimizer
 max_grad_norm: 0.1                # max gradient norm
 gradient_accumulation_steps: 1    # number of updates steps to accumulate before performing a backward/update pass
-callback_monitor: val_acc_label   # the metric to monitor for early stopping
+callback_monitor: val_f1        # the metric to monitor for early stopping
 seed: 42                          # random seed for initialization
 patience: 5                       # the number of epochs to wait before early stopping
 
@@ -34,7 +34,7 @@ lora_r: 16                        # the r parameter for LoRA
 wandb_name: multi                 # the name of the experiment in wandb
 wandb_checkpoint: true            # whether to save checkpoints to wandb
 wandb_entity: epfl_nlp_phd        # the wandb entity
-wandb_project: meta-knowledge     # the wandb project
+wandb_project: meta-memory        # the wandb project
 wandb_data: latest                # the wandb data version
 wandb_model: false                # whether to load the checkpoint from wandb
 wandb_api_key: 9edee5b624841e10c88fcf161d8dc54d4efbee29       # the wandb api key
